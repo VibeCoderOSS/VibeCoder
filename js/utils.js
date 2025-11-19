@@ -1,3 +1,4 @@
+
 // js/utils.js
 (function() {
   
@@ -14,7 +15,17 @@
     };
   };
 
-  // Helper: Path Resolution (wird an anderen Stellen genutzt)
+  // Helper: Read File as Data URL
+  const readAsDataURL = (file) => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  };
+
+  // Helper: Path Resolution
   const resolvePath = (baseFile, relativePath) => {
       if (relativePath.startsWith('/')) return relativePath.slice(1);
       if (relativePath.startsWith('http') || relativePath.startsWith('data:')) return relativePath;
@@ -64,6 +75,7 @@
 
   const Utils = {
     debounce,
+    readAsDataURL,
 
     // --- PARSING DES LLM OUTPUTS ---
     parseResponse: (text) => {
@@ -117,7 +129,7 @@
       return updatedFiles;
     },
 
-    // --- PREVIEW GENERATION: baut ein eigenstaendiges HTML mit inline JS/CSS ---
+    // --- PREVIEW GENERATION: baut ein eigenstaendiges HTML mit inline JS/CSS/IMAGES ---
     createPreviewSession: (files) => {
       const toRevoke = [];
 
@@ -129,7 +141,7 @@
 
       const resolveKey = (filename) => {
         if (!filename) return null;
-        let clean = filename.split('?')[0];
+        let clean = filename.split('?')[0]; // Query params entfernen
 
         // direkter Name
         if (files[clean] != null) return clean;
@@ -143,9 +155,13 @@
         const joined = parts.join('/');
         if (files[joined] != null) return joined;
 
-        // Dateiname als Fallback
+        // Dateiname als Fallback (einfache Suche)
         const base = parts[parts.length - 1];
         if (files[base] != null) return base;
+        
+        // Fallback für Assets in Unterordnern (z.B. assets/img.png wird gesucht als img.png)
+        const found = Object.keys(files).find(k => k.endsWith(base));
+        if (found) return found;
 
         return null;
       };
@@ -174,13 +190,36 @@
         }
       );
 
-      // TS / TSX Skripte fuer die statische Preview entfernen
+      // Images inline einbetten (src replacements)
+      // Wir suchen nach src="..." in img tags
+      html = html.replace(
+        /<img\b([^>]*?)src=["']([^"']+)["']([^>]*)>/gi,
+        (match, before, src, after) => {
+            // Wenn es schon data: oder http ist, ignorieren
+            if (src.startsWith('data:') || src.startsWith('http')) return match;
+
+            const key = resolveKey(src);
+            if (key && files[key] != null) {
+                // Annahme: files[key] ist bereits eine Data URL (für Images) oder Raw Content (für SVG)
+                // Wenn es ein SVG Code ist, müssen wir ihn evtl encoden, aber meistens laden wir Images als DataURLs hoch.
+                // Falls der User Text gespeichert hat (z.B. SVG Source), dann als data:image/svg+xml encoden.
+                let content = files[key];
+                if (!content.startsWith('data:') && (key.endsWith('.svg') || content.trim().startsWith('<svg'))) {
+                    content = `data:image/svg+xml;base64,${btoa(content)}`;
+                }
+                return `<img${before}src="${content}"${after}>`;
+            }
+            return match;
+        }
+      );
+
+      // TS / TSX Skripte entfernen
       html = html.replace(
         /<script\b[^>]*src=["'][^"']+\.(ts|tsx)["'][^>]*><\/script>/gi,
         ''
       );
 
-      // Fehlerbruecke in die Parent App
+      // Fehlerbruecke
       const errorScript = `
         <script>
           window.onerror = function(message, source, lineno, colno, error) {
@@ -241,12 +280,28 @@
       const files = {};
       if (!handle) return files;
 
+      const readEntry = async (entry, path = '') => {
+          if (entry.kind === 'file') {
+              const ext = entry.name.split('.').pop().toLowerCase();
+              // Text files
+              if (['html', 'css', 'js', 'mjs', 'json', 'md', 'txt', 'svg'].includes(ext)) {
+                  const file = await entry.getFile();
+                  files[path + entry.name] = await file.text();
+              }
+              // Binary files (Images) -> to Base64 DataURL
+              else if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'ico'].includes(ext)) {
+                  const file = await entry.getFile();
+                  files[path + entry.name] = await readAsDataURL(file);
+              }
+          } else if (entry.kind === 'directory') {
+              for await (const child of entry.values()) {
+                  await readEntry(child, path + entry.name + '/');
+              }
+          }
+      };
+
       for await (const entry of handle.values()) {
-        if (entry.kind === 'file' &&
-            /\.(html|css|js|mjs|json|md|txt|svg|png|jpg|jpeg)$/.test(entry.name)) {
-          const file = await entry.getFile();
-          files[entry.name] = await file.text();
-        }
+          await readEntry(entry);
       }
 
       return files;
@@ -254,13 +309,31 @@
 
     saveFiles: async (handle, files) => {
       if (!handle) return;
+      
       for (const [name, content] of Object.entries(files)) {
         try {
-          const flatName = name.split('/').pop();
-          const fh = await handle.getFileHandle(flatName, { create: true });
-          const w = await fh.createWritable();
-          await w.write(content);
-          await w.close();
+            // Simple handling for nested paths (e.g. assets/img.png)
+            const parts = name.split('/');
+            const fileName = parts.pop();
+            let currentDir = handle;
+
+            // Create/Get subdirectories
+            for (const part of parts) {
+                currentDir = await currentDir.getDirectoryHandle(part, { create: true });
+            }
+
+            const fh = await currentDir.getFileHandle(fileName, { create: true });
+            const w = await fh.createWritable();
+
+            // Write Blob if content is dataURL (image), otherwise string
+            if (content.startsWith('data:image')) {
+                 const res = await fetch(content);
+                 const blob = await res.blob();
+                 await w.write(blob);
+            } else {
+                 await w.write(content);
+            }
+            await w.close();
         } catch (e) {
           console.error(`Failed to save ${name}:`, e);
         }

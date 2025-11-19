@@ -32,6 +32,26 @@
             color: white;
             background: rgba(168, 85, 247, 0.05);
           }
+          input[type=range] {
+            -webkit-appearance: none; 
+            background: transparent; 
+          }
+          input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 16px;
+            width: 16px;
+            border-radius: 50%;
+            background: #a855f7;
+            cursor: pointer;
+            margin-top: -6px; 
+          }
+          input[type=range]::-webkit-slider-runnable-track {
+            width: 100%;
+            height: 4px;
+            cursor: pointer;
+            background: #374151;
+            border-radius: 2px;
+          }
         `;
         document.head.appendChild(s);
       }
@@ -54,7 +74,11 @@
       Zap: '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>',
       Alert: '<circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line>',
       Play: '<polygon points="5 3 19 12 5 21 5 3"></polygon>',
-      Pause: '<rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect>'
+      Pause: '<rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect>',
+      Stop: '<rect x="6" y="6" width="12" height="12"></rect>',
+      Image: '<rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline>',
+      Close: '<line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line>',
+      Trash: '<polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>'
     };
     return html`<svg width=${size} height=${size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className=${className} dangerouslySetInnerHTML=${{__html: paths[name] || ''}}></svg>`;
   };
@@ -286,7 +310,7 @@
 
     return html`
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
-        <div className="bg-gray-900 border border-gray-800 rounded-xl w-[600px] max-w-[95%] h-[85vh] shadow-2xl overflow-hidden flex flex-col">
+        <div className="bg-gray-900 border border-gray-800 rounded-xl w-[600px] max-w-[95%] h-[90vh] shadow-2xl overflow-hidden flex flex-col">
           <div className="h-1 bg-gradient-to-r from-purple-600 to-blue-600 flex-shrink-0"></div>
           
           <div className="p-6 flex-1 overflow-y-auto custom-scrollbar">
@@ -295,7 +319,7 @@
               <button onClick=${onClose} className="text-gray-400 hover:text-white">✕</button>
             </div>
             
-            <div className="space-y-6">
+            <div className="space-y-8">
                <!-- Connection Settings -->
                <div className="space-y-4">
                  <h3 className="text-sm font-bold text-gray-400 uppercase border-b border-gray-800 pb-2">Connection</h3>
@@ -311,6 +335,37 @@
                      </select>` :
                      html`<input value=${local.model} onInput=${e => setLocal({...local, model: e.target.value})} className="w-full bg-gray-950 border border-gray-800 rounded p-2 text-gray-300" />`
                    }
+                 </div>
+               </div>
+
+               <!-- Generation Parameters -->
+               <div className="space-y-4">
+                 <h3 className="text-sm font-bold text-gray-400 uppercase border-b border-gray-800 pb-2">Generation Parameters</h3>
+                 
+                 <div>
+                    <div className="flex justify-between mb-1">
+                        <label className="text-xs text-gray-500 uppercase">Temperature</label>
+                        <span className="text-xs text-gray-300 font-mono">${local.temperature}</span>
+                    </div>
+                    <input 
+                        type="range" min="0" max="2" step="0.1" 
+                        value=${local.temperature} 
+                        onChange=${e => setLocal({...local, temperature: parseFloat(e.target.value)})} 
+                        className="w-full h-2 bg-gray-800 rounded-lg appearance-none cursor-pointer"
+                    />
+                 </div>
+
+                 <div>
+                    <div className="flex justify-between mb-1">
+                        <label className="text-xs text-gray-500 uppercase">Context Window (Max Tokens)</label>
+                        <span className="text-xs text-gray-300 font-mono">${local.maxTokens}</span>
+                    </div>
+                    <input 
+                        type="number" step="1024"
+                        value=${local.maxTokens} 
+                        onChange=${e => setLocal({...local, maxTokens: parseInt(e.target.value)})} 
+                        className="w-full bg-gray-950 border border-gray-800 rounded p-2 text-gray-300 outline-none focus:border-purple-500"
+                    />
                  </div>
                </div>
 

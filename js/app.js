@@ -50,7 +50,9 @@
     const [settings, setSettings] = useState({
       apiUrl: 'http://localhost:1234/v1',
       model: 'local-model',
-      mode: 'auto' // auto | rewrite | patch
+      mode: 'auto', // auto | rewrite | patch
+      temperature: 0.7,
+      maxTokens: 32000
     });
 
     const [setupDone, setSetupDone] = useState(false);
@@ -58,6 +60,7 @@
     const [files, setFiles] = useState({});
     const [messages, setMessages] = useState([{ role: 'assistant', content: 'Ready to vibe. What are we building?' }]);
     const [input, setInput] = useState('');
+    const [attachments, setAttachments] = useState([]); // { name, data, path, saveToProject: boolean }
     
     // Detailed Status State
     const [appStatus, setAppStatus] = useState('idle'); // idle, reading, thinking, generating, patching
@@ -69,6 +72,7 @@
     const [activeFile, setActiveFile] = useState('index.html');
 
     const msgsEndRef = useRef(null);
+    const abortControllerRef = useRef(null);
     
     // Refs for safe async operations
     const filesRef = useRef(files);
@@ -92,7 +96,6 @@
     }, []);
 
     // --- ROBUST DEBOUNCED AUTO-SAVE ---
-    // Uses a specific ref to track the save timer to prevent stale closure issues
     const saveTimerRef = useRef(null);
 
     useEffect(() => {
@@ -105,7 +108,6 @@
             const currentHandle = dirHandleRef.current;
             
             if (Object.keys(currentFiles).length > 0 && currentHandle) {
-                // Use the fresh ref values
                 Utils.saveFiles(currentHandle, currentFiles);
             }
         }, 1000);
@@ -135,12 +137,11 @@ ${settings.mode === 'rewrite' ? 'ALWAYS REWRITE FULL FILES.' :
   settings.mode === 'patch' ? 'ALWAYS USE PATCHES FOR EXISTING FILES.' : 
   'DECIDE: Use PATCH for small changes (<20 lines). Use FULL FILE for new files or complex refactors.'}
 
-INTERACTIVE PLANNING (CRITICAL):
-If the user's request is complex, involves multiple files, or if you are unsure about the best approach:
-1. DO NOT generate code immediately.
-2. Propose options to the user (e.g., "Option 1: Inline Patch", "Option 2: Refactor").
-3. Wait for the user to confirm.
-4. Only output code when the path is clear.
+ASSETS & IMAGES:
+- If the user attaches images, they are ALREADY SAVED in the file system.
+- Look for "AVAILABLE ASSETS" in the user message.
+- Use the provided paths (e.g., "assets/image.png") directly in your code: <img src="assets/image.png">.
+- Do NOT use placeholders like "https://via.placeholder.com" if an asset is provided.
 
 OUTPUT FORMATS:
 
@@ -163,20 +164,121 @@ RULES:
 - If you are unsure about the context for a patch, REWRITE the file.
 `;
 
+    const handleFileSelect = async (e) => {
+        const selected = Array.from(e.target.files);
+        if (!selected.length) return;
+
+        const newAttachments = await Promise.all(selected.map(async f => {
+            // Auto-suggest assets/ folder for images
+            const isImage = f.type.startsWith('image/');
+            const defaultPath = isImage ? `assets/${f.name}` : f.name;
+
+            return {
+                name: f.name,
+                type: f.type,
+                data: await Utils.readAsDataURL(f),
+                path: defaultPath, 
+                saveToProject: true // Default to saving files
+            };
+        }));
+        
+        setAttachments(prev => [...prev, ...newAttachments]);
+    };
+
+    const toggleAttachmentSave = (index) => {
+        setAttachments(prev => prev.map((a, i) => i === index ? { ...a, saveToProject: !a.saveToProject } : a));
+    };
+
+    const updateAttachmentPath = (index, newPath) => {
+        setAttachments(prev => prev.map((a, i) => i === index ? { ...a, path: newPath } : a));
+    };
+
+    const removeAttachment = (index) => {
+        setAttachments(prev => prev.filter((_, i) => i !== index));
+    };
+
+    const handleStop = () => {
+        if (abortControllerRef.current) {
+            abortControllerRef.current.abort();
+            abortControllerRef.current = null;
+            setAppStatus('idle');
+            setStatusMsg('Stopped by user');
+            setStreamText(prev => prev + '\n[Stopped by user]');
+        }
+    };
+
     const handleSend = async () => {
-      if (!input.trim() || appStatus !== 'idle') return;
+      // If generating, stop instead
+      if (appStatus !== 'idle') {
+          handleStop();
+          return;
+      }
+
+      if ((!input.trim() && !attachments.length)) return;
       
-      const userMsg = { role: 'user', content: input };
-      const newMsgs = [...messages, userMsg];
+      // 1. Process Attachments & Save to Virtual FS
+      const newFiles = {};
+      const assetNotices = [];
+      
+      attachments.forEach(att => {
+          if (att.saveToProject) {
+              newFiles[att.path] = att.data;
+              assetNotices.push(att.path);
+          }
+      });
+      
+      // Update file state immediately
+      if (Object.keys(newFiles).length > 0) {
+          setFiles(prev => ({ ...prev, ...newFiles }));
+      }
+
+      // 2. Construct Message
+      let userContent;
+      let promptSuffix = "";
+
+      if (assetNotices.length > 0) {
+          promptSuffix = `\n\nAVAILABLE ASSETS:\nI have added the following files to your project structure. You MUST use these paths in your code:\n${assetNotices.map(p => `- ${p}`).join('\n')}`;
+      }
+
+      // If we have images, we use the multimodal format
+      if (attachments.length > 0) {
+          userContent = [
+              { type: "text", text: (input || "Analyze these images and update the project.") + promptSuffix }
+          ];
+          attachments.forEach(att => {
+              userContent.push({
+                  type: "image_url",
+                  image_url: { url: att.data }
+              });
+          });
+      } else {
+          userContent = input + promptSuffix;
+      }
+
+      const userMsg = { role: 'user', content: userContent };
+      
+      // Display message (simplified for UI)
+      const displayMsg = { 
+          role: 'user', 
+          content: (input || '[Images Uploaded]') + (assetNotices.length ? `\n\n[+ Added ${assetNotices.length} assets]` : '')
+      }; 
+      
+      const newMsgs = [...messages, displayMsg];
       setMessages(newMsgs);
+      
       setInput('');
+      setAttachments([]);
       setStreamText('');
       
       setAppStatus('reading');
       setStatusMsg('Reading context...');
 
-      // Context Construction
-      const contextFiles = Object.entries(files).map(([n, c]) => `<!-- filename: ${n} -->\n${c}`).join('\n\n');
+      // Context Construction (omit huge binary files from text prompt context to save tokens)
+      const contextFiles = Object.entries({ ...files, ...newFiles }).map(([n, c]) => {
+          // Don't include massive data URLs in the prompt text if possible, or truncate
+          if (n.match(/\.(png|jpg|jpeg|gif|webp|ico)$/i) && c.length > 500) return `<!-- filename: ${n} -->\n[Binary Image Data Available at ${n}]`;
+          return `<!-- filename: ${n} -->\n${c}`;
+      }).join('\n\n');
       
       let contextString = `CURRENT FILES:\n${contextFiles}\n\nUSER REQUEST: ${input}`;
       
@@ -184,13 +286,20 @@ RULES:
         contextString += `\n\n!!! DETECTED RUNTIME ERROR IN PREVIEW !!!\nError: ${runtimeError}\nPLEASE FIX THIS ERROR.`;
       }
 
+      // Real API Messages
       const apiMsgs = [
           { role: 'system', content: getSystemPrompt() },
           { role: 'system', content: contextString },
-          ...newMsgs.slice(-6) 
+          // Map previous messages to handle complex content correctly if needed, 
+          // but for now we only send the last few simple ones + current one
+          ...messages.slice(-6).filter(m => typeof m.content === 'string'), 
+          userMsg
       ];
 
       setRuntimeError(null);
+
+      // Setup AbortController
+      abortControllerRef.current = new AbortController();
 
       try {
         setAppStatus('thinking');
@@ -200,7 +309,14 @@ RULES:
         const res = await fetch(`${cleanUrl}/v1/chat/completions`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model: settings.model, messages: apiMsgs, stream: true, temperature: 0.7, max_tokens: 32000 })
+            body: JSON.stringify({ 
+                model: settings.model, 
+                messages: apiMsgs, 
+                stream: true, 
+                temperature: settings.temperature, 
+                max_tokens: settings.maxTokens 
+            }),
+            signal: abortControllerRef.current.signal
         });
 
         const reader = res.body.getReader();
@@ -246,7 +362,7 @@ RULES:
         // Parse results
         const parsed = Utils.parseResponse(fullText);
         
-        let nextFiles = Utils.applyPatchesToFiles(files, parsed.patches);
+        let nextFiles = Utils.applyPatchesToFiles({ ...files, ...newFiles }, parsed.patches);
         nextFiles = { ...nextFiles, ...parsed.files };
         
         // Only update state if we actually have new/changed files
@@ -262,11 +378,16 @@ RULES:
         setMessages(prev => [...prev, { role: 'assistant', content: finalMsgContent }]);
 
       } catch (e) {
-        console.error(e);
-        setMessages(prev => [...prev, { role: 'assistant', content: `Error: ${e.message}` }]);
+        if (e.name === 'AbortError') {
+             // Handled in handleStop
+        } else {
+            console.error(e);
+            setMessages(prev => [...prev, { role: 'assistant', content: `Error: ${e.message}` }]);
+        }
       } finally {
         setAppStatus('idle');
         setStatusMsg('');
+        abortControllerRef.current = null;
       }
     };
 
@@ -330,6 +451,37 @@ RULES:
               <${StatusBar} status=${appStatus} message=${statusMsg} />
               
               <div className="p-4 relative">
+                 <!-- Attachments List -->
+                 ${attachments.length > 0 && html`
+                    <div className="flex flex-col gap-2 mb-3 max-h-48 overflow-y-auto custom-scrollbar">
+                        ${attachments.map((att, i) => html`
+                            <div className="flex items-center gap-3 bg-gray-900 border border-gray-800 p-2 rounded-lg group">
+                                <div className="w-12 h-12 flex-shrink-0 bg-gray-800 rounded overflow-hidden border border-gray-700">
+                                   <img src=${att.data} className="w-full h-full object-cover" />
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                   <div className="flex items-center gap-2 mb-1">
+                                      <input 
+                                         type="text" 
+                                         value=${att.path} 
+                                         onChange=${e => updateAttachmentPath(i, e.target.value)}
+                                         className="bg-gray-950 text-xs text-green-400 border border-gray-700 rounded px-1 py-0.5 w-full focus:border-green-500 outline-none font-mono"
+                                         placeholder="Path (e.g., assets/img.png)"
+                                      />
+                                   </div>
+                                   <div 
+                                       className=${`text-[10px] cursor-pointer select-none ${att.saveToProject ? 'text-blue-400' : 'text-gray-500'}`} 
+                                       onClick=${() => toggleAttachmentSave(i)}
+                                   >
+                                       ${att.saveToProject ? '✓ Will save to project' : '○ Context only (Temporary)'}
+                                   </div>
+                                </div>
+                                <button onClick=${() => removeAttachment(i)} className="text-gray-500 hover:text-red-400 p-1 transition"><${Icon} name="Close" size=${14} /></button>
+                            </div>
+                        `)}
+                    </div>
+                 `}
+
                  ${runtimeError && html`
                     <div className="mb-3 p-2 bg-red-900/20 border border-red-500/30 rounded text-xs text-red-300 flex items-center gap-2 cursor-pointer hover:bg-red-900/30 transition" onClick=${() => setInput(`Fix error: ${runtimeError}`)}>
                        <${Icon} name="Alert" size=${14} />
@@ -337,17 +489,38 @@ RULES:
                        <span className="ml-auto text-red-400 underline text-[10px]">FIX</span>
                     </div>
                  `}
-                 <div className="relative group">
+                 <div className="relative group flex items-end gap-2 bg-gray-900 border border-gray-800 rounded-xl p-2 focus-within:border-purple-500/50 focus-within:ring-1 focus-within:ring-purple-500/20 transition">
+                    <input 
+                        type="file" 
+                        id="file-upload" 
+                        multiple 
+                        accept="image/*" 
+                        className="hidden" 
+                        onChange=${handleFileSelect}
+                    />
+                    <label for="file-upload" className="p-2 text-gray-500 hover:text-blue-400 cursor-pointer transition" title="Attach Image">
+                        <${Icon} name="Image" />
+                    </label>
+
                     <textarea 
                        value=${input} 
                        onInput=${e => setInput(e.target.value)} 
                        onKeyDown=${e => e.key === 'Enter' && !e.shiftKey && (e.preventDefault(), handleSend())}
-                       className="w-full bg-gray-900 border border-gray-800 rounded-xl p-3 pr-12 text-sm outline-none focus:border-purple-500/50 transition resize-none group-hover:border-gray-700 text-gray-200" 
-                       rows=${3} 
+                       className="flex-1 bg-transparent text-sm outline-none resize-none text-gray-200 max-h-32 py-2" 
+                       rows=${1}
+                       style=${{minHeight: '24px'}} 
                        placeholder="Ask to change something..." 
                     />
-                    <button onClick=${handleSend} disabled=${appStatus !== 'idle' || !input.trim()} className="absolute right-3 bottom-3 p-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg shadow-lg shadow-blue-600/20 transition disabled:opacity-50 disabled:cursor-not-allowed">
-                       <${Icon} name="Send" />
+                    <button 
+                        onClick=${handleSend} 
+                        disabled=${(!input.trim() && !attachments.length) && appStatus === 'idle'} 
+                        className=${`p-2 rounded-lg shadow-lg transition flex-shrink-0 ${
+                            appStatus !== 'idle' 
+                                ? 'bg-red-600 hover:bg-red-500 text-white shadow-red-900/20' 
+                                : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-600/20 disabled:opacity-50 disabled:cursor-not-allowed'
+                        }`}
+                    >
+                       <${Icon} name=${appStatus !== 'idle' ? 'Stop' : 'Send'} />
                     </button>
                  </div>
               </div>
