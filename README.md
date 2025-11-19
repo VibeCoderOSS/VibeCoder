@@ -147,6 +147,8 @@ VibeCoder is currently **experimental**:
 - Error handling is still improving
 - Some edge cases in patching and file detection may fail
 - Many settings are still rather generic: Temperature (0.7), context window per asnwer (32k). This will become adjustable later.
+- I obviously need to add a stopp button for the generations.
+- I want to create the option to upload images as context and as assets.
 
 Feedback, issues and ideas are very welcome.
 
