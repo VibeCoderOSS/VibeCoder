@@ -20,6 +20,9 @@ Runs fully locally from `index.html`. No build steps. No node_modules. Just vibe
 - 💾 Auto save for edited files
 - 🎨 Modern UI with React and Tailwind, all browser side
 - 🚫 No cloud: all requests stay on `localhost`
+- Adjustable model settings (temperature, context length per answer)
+- Stop button for running generations
+- Optional image upload as context and as assets
 
 ---
 
