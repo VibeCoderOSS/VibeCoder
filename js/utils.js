@@ -1,4 +1,3 @@
-
 // js/utils.js
 (function() {
   
@@ -141,25 +140,20 @@
 
       const resolveKey = (filename) => {
         if (!filename) return null;
-        let clean = filename.split('?')[0]; // Query params entfernen
+        let clean = filename.split('?')[0];
 
-        // direkter Name
         if (files[clean] != null) return clean;
 
-        // fuehrende Slashes weg
         clean = clean.replace(/^\/+/, '');
         if (files[clean] != null) return clean;
 
-        // normalisierter Pfad
         const parts = clean.split(/[\\/]/).filter(Boolean);
         const joined = parts.join('/');
         if (files[joined] != null) return joined;
 
-        // Dateiname als Fallback (einfache Suche)
         const base = parts[parts.length - 1];
         if (files[base] != null) return base;
         
-        // Fallback für Assets in Unterordnern (z.B. assets/img.png wird gesucht als img.png)
         const found = Object.keys(files).find(k => k.endsWith(base));
         if (found) return found;
 
@@ -190,19 +184,14 @@
         }
       );
 
-      // Images inline einbetten (src replacements)
-      // Wir suchen nach src="..." in img tags
+      // Images inline einbetten
       html = html.replace(
         /<img\b([^>]*?)src=["']([^"']+)["']([^>]*)>/gi,
         (match, before, src, after) => {
-            // Wenn es schon data: oder http ist, ignorieren
             if (src.startsWith('data:') || src.startsWith('http')) return match;
 
             const key = resolveKey(src);
             if (key && files[key] != null) {
-                // Annahme: files[key] ist bereits eine Data URL (für Images) oder Raw Content (für SVG)
-                // Wenn es ein SVG Code ist, müssen wir ihn evtl encoden, aber meistens laden wir Images als DataURLs hoch.
-                // Falls der User Text gespeichert hat (z.B. SVG Source), dann als data:image/svg+xml encoden.
                 let content = files[key];
                 if (!content.startsWith('data:') && (key.endsWith('.svg') || content.trim().startsWith('<svg'))) {
                     content = `data:image/svg+xml;base64,${btoa(content)}`;
@@ -213,25 +202,63 @@
         }
       );
 
-      // TS / TSX Skripte entfernen
+      // TS / TSX entfernen
       html = html.replace(
         /<script\b[^>]*src=["'][^"']+\.(ts|tsx)["'][^>]*><\/script>/gi,
         ''
       );
 
-      // Fehlerbruecke
+      // Fehler und Point & Vibe Bridge
       const errorScript = `
         <script>
-          window.onerror = function(message, source, lineno, colno, error) {
-            try {
-              if (window.parent) {
-                window.parent.postMessage(
-                  { type: 'iframe-error', message, source, line: lineno, column: colno },
-                  '*'
-                );
-              }
-            } catch (e) {}
-          };
+          (function() {
+            window.__VC_POINT_VIBE_ENABLED__ = false;
+
+            window.addEventListener('message', function(event) {
+              try {
+                if (!event || !event.data || typeof event.data !== 'object') return;
+                if (event.data.type === 'toggle-point-vibe') {
+                  window.__VC_POINT_VIBE_ENABLED__ = !!event.data.enabled;
+                }
+              } catch (e) {}
+            });
+
+            window.addEventListener('click', function(ev) {
+              try {
+                if (!window.__VC_POINT_VIBE_ENABLED__) return;
+                var target = ev.target;
+                if (!target) return;
+
+                ev.preventDefault();
+                ev.stopPropagation();
+
+                var rect = target.getBoundingClientRect();
+                var payload = {
+                  type: 'iframe-point',
+                  tag: target.tagName || '',
+                  text: (target.innerText || target.textContent || '').slice(0, 200),
+                  classes: target.className || '',
+                  id: target.id || '',
+                  rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
+                };
+
+                if (window.parent) {
+                  window.parent.postMessage(payload, '*');
+                }
+              } catch (e) {}
+            }, true);
+
+            window.onerror = function(message, source, lineno, colno, error) {
+              try {
+                if (window.parent) {
+                  window.parent.postMessage(
+                    { type: 'iframe-error', message: message, source: source, line: lineno, column: colno },
+                    '*'
+                  );
+                }
+              } catch (e) {}
+            };
+          })();
         </script>
       `;
 
@@ -283,12 +310,10 @@
       const readEntry = async (entry, path = '') => {
           if (entry.kind === 'file') {
               const ext = entry.name.split('.').pop().toLowerCase();
-              // Text files
               if (['html', 'css', 'js', 'mjs', 'json', 'md', 'txt', 'svg'].includes(ext)) {
                   const file = await entry.getFile();
                   files[path + entry.name] = await file.text();
               }
-              // Binary files (Images) -> to Base64 DataURL
               else if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'ico'].includes(ext)) {
                   const file = await entry.getFile();
                   files[path + entry.name] = await readAsDataURL(file);
@@ -312,12 +337,10 @@
       
       for (const [name, content] of Object.entries(files)) {
         try {
-            // Simple handling for nested paths (e.g. assets/img.png)
             const parts = name.split('/');
             const fileName = parts.pop();
             let currentDir = handle;
 
-            // Create/Get subdirectories
             for (const part of parts) {
                 currentDir = await currentDir.getDirectoryHandle(part, { create: true });
             }
@@ -325,7 +348,6 @@
             const fh = await currentDir.getFileHandle(fileName, { create: true });
             const w = await fh.createWritable();
 
-            // Write Blob if content is dataURL (image), otherwise string
             if (content.startsWith('data:image')) {
                  const res = await fetch(content);
                  const blob = await res.blob();

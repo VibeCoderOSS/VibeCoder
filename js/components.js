@@ -1,4 +1,3 @@
-
 // js/components.js
 (function() {
   const html = htm.bind(React.createElement);
@@ -78,7 +77,8 @@
       Stop: '<rect x="6" y="6" width="12" height="12"></rect>',
       Image: '<rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline>',
       Close: '<line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line>',
-      Trash: '<polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>'
+      Trash: '<polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>',
+      Target: '<circle cx="12" cy="12" r="8"></circle><circle cx="12" cy="12" r="4"></circle><line x1="12" y1="2" x2="12" y2="5"></line><line x1="12" y1="19" x2="12" y2="22"></line><line x1="2" y1="12" x2="5" y2="12"></line><line x1="19" y1="12" x2="22" y2="12"></line>'
     };
     return html`<svg width=${size} height=${size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className=${className} dangerouslySetInnerHTML=${{__html: paths[name] || ''}}></svg>`;
   };
@@ -113,8 +113,67 @@
     const [scale, setScale] = useState('fit'); 
     const [scaleFactor, setScaleFactor] = useState(1);
     const [copied, setCopied] = useState(false);
+    const [pointMode, setPointMode] = useState(false);
     const cleanupRef = useRef(null);
     const containerRef = useRef(null);
+    const iframeRef = useRef(null);
+    
+    // Dateibaum aufbauen
+    const buildFileTree = () => {
+      const root = {};
+      Object.keys(files || {}).forEach(path => {
+        const parts = path.split('/');
+        let current = root;
+        parts.forEach((part, index) => {
+          if (!current[part]) {
+            current[part] = { children: {}, isFile: index === parts.length - 1 };
+          }
+          if (index === parts.length - 1) {
+            current[part].isFile = true;
+          } else {
+            current[part].isFile = false;
+          }
+          current = current[part].children;
+        });
+      });
+      return root;
+    };
+
+    const renderTree = (nodeMap, prefix = '') => {
+      const entries = Object.entries(nodeMap).sort(([aName], [bName]) => aName.localeCompare(bName));
+      return entries.map(([name, node]) => {
+        const fullPath = prefix ? prefix + '/' + name : name;
+        if (node.isFile) {
+          const isActive = activeFile === fullPath;
+          return html`
+            <button
+              key=${fullPath}
+              onClick=${() => setActiveFile(fullPath)}
+              className=${`w-full text-left px-3 py-1.5 text-[12px] font-mono flex items-center gap-2 ${
+                isActive ? 'bg-gray-800 text-white' : 'text-gray-300 hover:bg-gray-800/60'
+              }`}
+            >
+              <span className=${`w-1.5 h-1.5 rounded-full ${isActive ? 'bg-purple-400' : 'bg-gray-600'}`}></span>
+              <span className="truncate">${name}</span>
+            </button>
+          `;
+        } else {
+          return html`
+            <div key=${fullPath} className="mb-1">
+              <div className="flex items-center gap-2 px-3 py-1.5 text-[11px] uppercase tracking-wide text-gray-500">
+                 <span className="text-gray-600">▾</span>
+                 <span className="truncate">${name}</span>
+              </div>
+              <div className="ml-3 border-l border-gray-800">
+                ${renderTree(node.children, fullPath)}
+              </div>
+            </div>
+          `;
+        }
+      });
+    };
+
+    const fileTree = buildFileTree();
     
     // Handle Preview Generation
     useEffect(() => {
@@ -143,6 +202,21 @@
       };
     }, [files, viewMode, isPlaying]);
 
+    // Point & Vibe Modus in das iframe schicken
+    useEffect(() => {
+      if (viewMode !== 'preview') return;
+      const iframe = iframeRef.current;
+      if (!iframe || !iframe.contentWindow) return;
+      try {
+        iframe.contentWindow.postMessage(
+          { type: 'toggle-point-vibe', enabled: pointMode },
+          '*'
+        );
+      } catch (e) {
+        console.error('Point & Vibe toggle failed', e);
+      }
+    }, [pointMode, iframeUrl, viewMode]);
+
     // Handle Intelligent Scaling
     useLayoutEffect(() => {
       if (viewMode !== 'preview' || !containerRef.current) return;
@@ -151,7 +225,6 @@
         if (scale === 'fit') {
            const containerWidth = containerRef.current.offsetWidth;
            const baseWidth = 1280; 
-           // Calculate ratio to fit, accounting for padding
            let ratio = (containerWidth - 64) / baseWidth; 
            if (ratio > 1) ratio = 1;
            setScaleFactor(ratio);
@@ -213,6 +286,16 @@
                  <button onClick=${handleReload} className="p-2 text-gray-400 hover:text-white hover:bg-gray-800 rounded transition" title="Reload">
                     <${Icon} name="Refresh" size=${18} />
                  </button>
+                 <button 
+                    onClick=${() => setPointMode(v => !v)} 
+                    className=${`flex items-center gap-1 px-2 py-1 rounded text-[10px] uppercase tracking-wide font-semibold transition ${
+                      pointMode ? 'bg-purple-600/20 text-purple-200 border border-purple-500/60' : 'text-gray-500 hover:text-gray-200 border border-transparent hover:border-gray-700'
+                    }`}
+                    title="Point & Vibe"
+                 >
+                    <${Icon} name="Target" size=${14} />
+                    <span className="hidden md:inline">Point & Vibe</span>
+                 </button>
                  <div className="flex items-center gap-2 ml-2">
                     <span className="text-[10px] uppercase text-gray-600 font-bold">Zoom</span>
                     <select 
@@ -229,14 +312,10 @@
               </div>
            `}
 
-           <!-- File Tabs (Code View) -->
+           <!-- Code View Mitte jetzt leer fuer sauberere Optik -->
            ${viewMode === 'code' && html`
-             <div className="flex-1 flex gap-1 overflow-x-auto custom-scrollbar mx-2">
-               ${Object.keys(files).map(f => html`
-                  <button onClick=${() => setActiveFile(f)} className=${`px-3 py-1.5 text-xs font-mono transition border-b-2 whitespace-nowrap ${activeFile === f ? 'border-purple-500 text-white' : 'border-transparent text-gray-500 hover:text-gray-300'}`}>
-                   ${f}
-                </button>
-               `)}
+             <div className="flex-1 mx-2 text-xs text-gray-600 italic">
+                <!-- Code editor uses sidebar tree rechts -->
              </div>
            `}
 
@@ -260,6 +339,12 @@
               </div>
            ` : viewMode === 'preview' ? html`
               <div className=${`relative w-full h-full flex flex-col items-center bg-gray-800/50 overflow-hidden ${scale !== '1' ? 'py-8' : ''}`}>
+                  ${pointMode && html`
+                    <div className="pointer-events-none absolute top-4 right-4 z-30 bg-purple-950/90 text-[11px] text-purple-50 px-3 py-1.5 rounded-full border border-purple-500/70 shadow-lg flex items-center gap-2">
+                       <${Icon} name="Target" size=${14} />
+                       <span>Point & Vibe aktiv, klicke ins Preview.</span>
+                    </div>
+                  `}
                   <!-- Scaled Container -->
                   <div style=${{
                       width: scaledWidth,
@@ -273,7 +358,7 @@
                       backgroundColor: 'white'
                   }}>
                     ${isPlaying && iframeUrl ? html`
-                        <iframe src=${iframeUrl} className="w-full h-full border-none bg-white rounded-md" sandbox="allow-scripts allow-modals allow-forms allow-same-origin allow-popups"></iframe>
+                        <iframe ref=${iframeRef} src=${iframeUrl} className="w-full h-full border-none bg-white rounded-md" sandbox="allow-scripts allow-modals allow-forms allow-same-origin allow-popups"></iframe>
                     ` : html`
                         <div className="w-full h-full flex items-center justify-center bg-gray-900 text-gray-500 flex-col border border-gray-700 rounded-md">
                              <div className="p-6 rounded-full bg-gray-800 mb-4"><${Icon} name="Pause" size=${48} /></div>
@@ -283,12 +368,25 @@
                   </div>
               </div>
            ` : html`
-              <textarea 
-                 value=${files[activeFile] || ''} 
-                 onInput=${e => onFileChange(activeFile, e.target.value)} 
-                 className="w-full h-full bg-[#0f0f12] text-gray-300 p-6 font-mono text-sm outline-none resize-none custom-scrollbar leading-relaxed" 
-                 spellCheck="false" 
-              />
+              <div className="flex w-full h-full">
+                 <div className="flex-1">
+                    <textarea 
+                       value=${files[activeFile] || ''} 
+                       onInput=${e => onFileChange(activeFile, e.target.value)} 
+                       className="w-full h-full bg-[#0f0f12] text-gray-300 p-6 font-mono text-sm outline-none resize-none custom-scrollbar leading-relaxed" 
+                       spellCheck="false" 
+                    />
+                 </div>
+                 <div className="w-64 border-l border-gray-800 bg-gray-950 flex-shrink-0 flex flex-col">
+                    <div className="px-3 py-2 text-[11px] uppercase tracking-wide text-gray-500 border-b border-gray-800 flex items-center justify-between">
+                       <span>Dateien</span>
+                       <span className="text-gray-600 text-[10px]">Projekt</span>
+                    </div>
+                    <div className="flex-1 overflow-y-auto custom-scrollbar py-1">
+                       ${renderTree(fileTree)}
+                    </div>
+                 </div>
+              </div>
            `}
         </div>
       </div>

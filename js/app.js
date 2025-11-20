@@ -1,4 +1,3 @@
-
 // js/app.js
 (function() {
   const html = htm.bind(React.createElement);
@@ -70,6 +69,7 @@
     const [streamText, setStreamText] = useState('');
     const [runtimeError, setRuntimeError] = useState(null);
     const [activeFile, setActiveFile] = useState('index.html');
+    const [pointEvents, setPointEvents] = useState([]); // Point & Vibe Klicks
 
     const msgsEndRef = useRef(null);
     const abortControllerRef = useRef(null);
@@ -83,12 +83,27 @@
 
     useEffect(() => { msgsEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, streamText, appStatus]);
     
-    // Handle iframe runtime errors
+    // Handle iframe runtime errors und Point Events
     useEffect(() => {
         const handler = (e) => { 
             if (e.data?.type === 'iframe-error') {
                 console.error("Preview Error:", e.data.message);
                 setRuntimeError(e.data.message); 
+            }
+            if (e.data?.type === 'iframe-point') {
+                setPointEvents(prev => {
+                    const next = [
+                      ...prev,
+                      {
+                        tag: e.data.tag,
+                        text: e.data.text,
+                        classes: e.data.classes,
+                        id: e.data.id,
+                        rect: e.data.rect
+                      }
+                    ];
+                    return next.slice(-6);
+                });
             }
         };
         window.addEventListener('message', handler);
@@ -120,7 +135,7 @@
 
     useEffect(() => {
         if (!files[activeFile] && Object.keys(files).length) setActiveFile(Object.keys(files)[0]);
-    }, [files]);
+    }, [files, activeFile]);
 
     const getSystemPrompt = () => `
 You are VibeCoder, an expert frontend engineer.
@@ -169,7 +184,7 @@ RULES:
         if (!selected.length) return;
 
         const newAttachments = await Promise.all(selected.map(async f => {
-            // Auto-suggest assets/ folder for images
+            // Auto suggest assets/ folder for images
             const isImage = f.type.startsWith('image/');
             const defaultPath = isImage ? `assets/${f.name}` : f.name;
 
@@ -197,6 +212,14 @@ RULES:
         setAttachments(prev => prev.filter((_, i) => i !== index));
     };
 
+    const removePoint = (index) => {
+        setPointEvents(prev => prev.filter((_, i) => i !== index));
+    };
+
+    const clearPoints = () => {
+        setPointEvents([]);
+    };
+
     const handleStop = () => {
         if (abortControllerRef.current) {
             abortControllerRef.current.abort();
@@ -216,7 +239,7 @@ RULES:
 
       if ((!input.trim() && !attachments.length)) return;
       
-      // 1. Process Attachments & Save to Virtual FS
+      // 1. Process Attachments und speichern ins Projekt
       const newFiles = {};
       const assetNotices = [];
       
@@ -227,7 +250,7 @@ RULES:
           }
       });
       
-      // Update file state immediately
+      // Update file state sofort
       if (Object.keys(newFiles).length > 0) {
           setFiles(prev => ({ ...prev, ...newFiles }));
       }
@@ -240,7 +263,7 @@ RULES:
           promptSuffix = `\n\nAVAILABLE ASSETS:\nI have added the following files to your project structure. You MUST use these paths in your code:\n${assetNotices.map(p => `- ${p}`).join('\n')}`;
       }
 
-      // If we have images, we use the multimodal format
+      // Wenn Bilder da sind, multimodales Format
       if (attachments.length > 0) {
           userContent = [
               { type: "text", text: (input || "Analyze these images and update the project.") + promptSuffix }
@@ -257,7 +280,7 @@ RULES:
 
       const userMsg = { role: 'user', content: userContent };
       
-      // Display message (simplified for UI)
+      // Anzeige im Chat
       const displayMsg = { 
           role: 'user', 
           content: (input || '[Images Uploaded]') + (assetNotices.length ? `\n\n[+ Added ${assetNotices.length} assets]` : '')
@@ -273,9 +296,8 @@ RULES:
       setAppStatus('reading');
       setStatusMsg('Reading context...');
 
-      // Context Construction (omit huge binary files from text prompt context to save tokens)
+      // Kontext erstellen, grosse Binaerdaten rauslassen
       const contextFiles = Object.entries({ ...files, ...newFiles }).map(([n, c]) => {
-          // Don't include massive data URLs in the prompt text if possible, or truncate
           if (n.match(/\.(png|jpg|jpeg|gif|webp|ico)$/i) && c.length > 500) return `<!-- filename: ${n} -->\n[Binary Image Data Available at ${n}]`;
           return `<!-- filename: ${n} -->\n${c}`;
       }).join('\n\n');
@@ -286,12 +308,20 @@ RULES:
         contextString += `\n\n!!! DETECTED RUNTIME ERROR IN PREVIEW !!!\nError: ${runtimeError}\nPLEASE FIX THIS ERROR.`;
       }
 
+      if (pointEvents.length) {
+        contextString += `\n\nPOINT & VIBE SELECTIONS:\n` + pointEvents.map((p, idx) => {
+          const safeText = (p.text || '').replace(/\s+/g, ' ').slice(0, 140);
+          const safeClasses = (p.classes || '').toString().replace(/\s+/g, ' ').slice(0, 140);
+          const safeTag = (p.tag || '').toLowerCase();
+          return `#${idx + 1}: tag=<${safeTag}> id="${p.id || ''}" class="${safeClasses}" text="${safeText}"`;
+        }).join('\n');
+      }
+
       // Real API Messages
       const apiMsgs = [
           { role: 'system', content: getSystemPrompt() },
           { role: 'system', content: contextString },
-          // Map previous messages to handle complex content correctly if needed, 
-          // but for now we only send the last few simple ones + current one
+          // nur letzte einfache Messages
           ...messages.slice(-6).filter(m => typeof m.content === 'string'), 
           userMsg
       ];
@@ -365,7 +395,6 @@ RULES:
         let nextFiles = Utils.applyPatchesToFiles({ ...files, ...newFiles }, parsed.patches);
         nextFiles = { ...nextFiles, ...parsed.files };
         
-        // Only update state if we actually have new/changed files
         if (Object.keys(nextFiles).length > 0) {
             setFiles(nextFiles);
             setViewMode('preview');
@@ -379,7 +408,7 @@ RULES:
 
       } catch (e) {
         if (e.name === 'AbortError') {
-             // Handled in handleStop
+             // gestoppt
         } else {
             console.error(e);
             setMessages(prev => [...prev, { role: 'assistant', content: `Error: ${e.message}` }]);
@@ -479,6 +508,24 @@ RULES:
                                 <button onClick=${() => removeAttachment(i)} className="text-gray-500 hover:text-red-400 p-1 transition"><${Icon} name="Close" size=${14} /></button>
                             </div>
                         `)}
+                    </div>
+                 `}
+
+                 <!-- Point & Vibe Chips -->
+                 ${pointEvents.length > 0 && html`
+                    <div className="mb-3 flex flex-wrap gap-2 items-center text-[10px] text-gray-400">
+                       <span className="uppercase tracking-wide font-semibold text-gray-500">Point & Vibe</span>
+                       ${pointEvents.map((p, idx) => html`
+                          <div key=${idx} className="flex items-center gap-1 px-2 py-1 rounded-full bg-purple-950/40 border border-purple-700/60">
+                             <span className="text-purple-300 font-mono">#${idx + 1}</span>
+                             <span className="font-mono text-gray-300">&lt;${(p.tag || '').toLowerCase()}&gt;</span>
+                             ${p.text && html`<span className="max-w-[140px] truncate text-gray-400">"${p.text}"</span>`}
+                             <button className="ml-1 text-gray-500 hover:text-red-300" onClick=${() => removePoint(idx)}>
+                               <${Icon} name="Close" size=${10} />
+                             </button>
+                          </div>
+                       `)}
+                       <button className="ml-auto text-gray-500 hover:text-gray-200 underline decoration-dotted" onClick=${clearPoints}>Reset</button>
                     </div>
                  `}
 
