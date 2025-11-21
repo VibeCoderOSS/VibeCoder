@@ -78,10 +78,7 @@
       Image: '<rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline>',
       Close: '<line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line>',
       Trash: '<polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>',
-      Target: '<circle cx="12" cy="12" r="8"></circle><circle cx="12" cy="12" r="4"></circle><line x1="12" y1="2" x2="12" y2="5"></line><line x1="12" y1="19" x2="12" y2="22"></line><line x1="2" y1="12" x2="5" y2="12"></line><line x1="19" y1="12" x2="22" y2="12"></line>',
-      Clock: '<circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline>',
-      Package: '<line x1="16.5" y1="9.4" x2="7.5" y2="4.21"></line><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line>',
-      Undo: '<path d="M3 7v6h6"></path><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"></path>'
+      Target: '<circle cx="12" cy="12" r="8"></circle><circle cx="12" cy="12" r="4"></circle><line x1="12" y1="2" x2="12" y2="5"></line><line x1="12" y1="19" x2="12" y2="22"></line><line x1="2" y1="12" x2="5" y2="12"></line><line x1="19" y1="12" x2="22" y2="12"></line>'
     };
     return html`<svg width=${size} height=${size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className=${className} dangerouslySetInnerHTML=${{__html: paths[name] || ''}}></svg>`;
   };
@@ -110,7 +107,7 @@
   };
 
   // --- CODE PREVIEW ---
-  const CodePreview = ({ files, activeFile, setActiveFile, viewMode, setViewMode, onFileChange, modifiedFiles = [], onOpenHistory }) => {
+  const CodePreview = ({ files, activeFile, setActiveFile, viewMode, setViewMode, onFileChange }) => {
     const [iframeUrl, setIframeUrl] = useState(null);
     const [isPlaying, setIsPlaying] = useState(true);
     const [scale, setScale] = useState('fit'); 
@@ -148,7 +145,6 @@
         const fullPath = prefix ? prefix + '/' + name : name;
         if (node.isFile) {
           const isActive = activeFile === fullPath;
-          const isModified = modifiedFiles.includes(fullPath);
           return html`
             <button
               key=${fullPath}
@@ -157,11 +153,8 @@
                 isActive ? 'bg-gray-800 text-white' : 'text-gray-300 hover:bg-gray-800/60'
               }`}
             >
-              <span className=${`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
-                  isModified ? 'bg-yellow-400 animate-pulse' : (isActive ? 'bg-purple-400' : 'bg-gray-600')
-              }`}></span>
-              <span className=${`truncate ${isModified ? 'text-yellow-100' : ''}`}>${name}</span>
-              ${isModified && html`<span className="text-[9px] text-yellow-500 ml-auto font-bold">MOD</span>`}
+              <span className=${`w-1.5 h-1.5 rounded-full ${isActive ? 'bg-purple-400' : 'bg-gray-600'}`}></span>
+              <span className="truncate">${name}</span>
             </button>
           `;
         } else {
@@ -279,14 +272,14 @@
         <div className="h-14 bg-gray-900 border-b border-gray-800 flex items-center justify-between px-4 flex-shrink-0 shadow-sm z-20">
            
            <!-- View Toggle -->
-           <div className="flex bg-gray-950 p-1 rounded-lg border border-gray-800 mr-4 flex-shrink-0">
+           <div className="flex bg-gray-950 p-1 rounded-lg border border-gray-800 mr-4">
              <button onClick=${() => setViewMode('preview')} className=${`flex items-center gap-2 px-3 py-1.5 rounded text-xs font-medium transition ${viewMode === 'preview' ? 'bg-gray-800 text-white shadow-sm' : 'text-gray-500 hover:text-white'}`}><${Icon} name="Eye" size=${14} /> Preview</button>
              <button onClick=${() => setViewMode('code')} className=${`flex items-center gap-2 px-3 py-1.5 rounded text-xs font-medium transition ${viewMode === 'code' ? 'bg-gray-800 text-white shadow-sm' : 'text-gray-500 hover:text-white'}`}><${Icon} name="Code" size=${14} /> Code</button>
            </div>
 
            <!-- Preview Controls -->
            ${viewMode === 'preview' && html`
-              <div className="flex items-center gap-3 px-3 border-l border-r border-gray-800 mx-2 overflow-x-auto no-scrollbar">
+              <div className="flex items-center gap-3 px-3 border-l border-r border-gray-800 mx-2">
                  <button onClick=${() => setIsPlaying(!isPlaying)} className=${`p-2 rounded transition ${isPlaying ? 'text-blue-400 hover:bg-blue-500/10' : 'text-gray-500 hover:text-gray-300'}`} title=${isPlaying ? "Pause" : "Play"}>
                     <${Icon} name=${isPlaying ? "Pause" : "Play"} size=${18} />
                  </button>
@@ -295,7 +288,7 @@
                  </button>
                  <button 
                     onClick=${() => setPointMode(v => !v)} 
-                    className=${`flex items-center gap-1 px-2 py-1 rounded text-[10px] uppercase tracking-wide font-semibold transition flex-shrink-0 ${
+                    className=${`flex items-center gap-1 px-2 py-1 rounded text-[10px] uppercase tracking-wide font-semibold transition ${
                       pointMode ? 'bg-purple-600/20 text-purple-200 border border-purple-500/60' : 'text-gray-500 hover:text-gray-200 border border-transparent hover:border-gray-700'
                     }`}
                     title="Point & Vibe"
@@ -303,8 +296,8 @@
                     <${Icon} name="Target" size=${14} />
                     <span className="hidden md:inline">Point & Vibe</span>
                  </button>
-                 <div className="flex items-center gap-2 ml-2 flex-shrink-0">
-                    <span className="text-[10px] uppercase text-gray-600 font-bold hidden sm:inline">Zoom</span>
+                 <div className="flex items-center gap-2 ml-2">
+                    <span className="text-[10px] uppercase text-gray-600 font-bold">Zoom</span>
                     <select 
                        value=${scale} 
                        onChange=${e => setScale(e.target.value)} 
@@ -319,14 +312,15 @@
               </div>
            `}
 
-            <div className="flex-1"></div>
+           <!-- Code View Mitte jetzt leer fuer sauberere Optik -->
+           ${viewMode === 'code' && html`
+             <div className="flex-1 mx-2 text-xs text-gray-600 italic">
+                <!-- Code editor uses sidebar tree rechts -->
+             </div>
+           `}
 
            <!-- Actions -->
-           <div className="flex items-center gap-2 pl-2 flex-shrink-0">
-             <button onClick=${onOpenHistory} className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium bg-gray-800 hover:bg-gray-700 text-gray-300 rounded border border-gray-700 transition" title="History">
-                <${Icon} name="Clock" size=${14} /> <span className="hidden lg:inline">History</span>
-             </button>
-             <div className="w-[1px] h-6 bg-gray-800 mx-1"></div>
+           <div className="flex items-center gap-1 pl-4 ml-auto">
              <button onClick=${handleCopy} className="p-2 text-gray-400 hover:text-white hover:bg-gray-800 rounded transition" title="Copy Code">
                 <${Icon} name="Copy" size=${16} className=${copied ? "text-green-500" : ""} />
              </button>
@@ -515,47 +509,6 @@
     `;
   };
 
-  // --- HISTORY MODAL ---
-  const HistoryModal = ({ isOpen, onClose, history, currentVersionIndex, onRestore }) => {
-    if (!isOpen) return null;
-
-    return html`
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
-         <div className="bg-gray-900 border border-gray-800 rounded-xl w-[600px] max-w-[95%] h-[80vh] shadow-2xl overflow-hidden flex flex-col">
-            <div className="p-4 border-b border-gray-800 flex justify-between items-center">
-               <h3 className="font-bold text-white flex items-center gap-2"><${Icon} name="Clock" /> Version History</h3>
-               <button onClick=${onClose}><${Icon} name="Close" /></button>
-            </div>
-            <div className="flex-1 overflow-y-auto custom-scrollbar p-4 space-y-3">
-               ${history.length === 0 && html`<div className="text-center text-gray-500 py-10">No history yet. Make some changes!</div>`}
-               ${history.slice().reverse().map((entry, revIndex) => {
-                   const realIndex = history.length - 1 - revIndex;
-                   const isCurrent = realIndex === currentVersionIndex;
-                   return html`
-                      <div key=${realIndex} className=${`p-4 rounded-lg border transition relative ${isCurrent ? 'bg-purple-900/20 border-purple-500/50' : 'bg-gray-950 border-gray-800 hover:border-gray-600'}`}>
-                         <div className="flex justify-between items-start mb-2">
-                            <div>
-                               <span className="text-xs font-mono text-gray-500">#${realIndex + 1}</span>
-                               <span className="text-xs text-gray-400 ml-2">${new Date(entry.timestamp).toLocaleTimeString()}</span>
-                            </div>
-                            ${!isCurrent && html`
-                                <button onClick=${() => { onRestore(realIndex); onClose(); }} className="text-xs bg-gray-800 hover:bg-gray-700 text-gray-200 px-2 py-1 rounded border border-gray-700 flex items-center gap-1">
-                                   <${Icon} name="Undo" size=${12} /> Restore
-                                </button>
-                            `}
-                            ${isCurrent && html`<span className="text-[10px] bg-purple-500 text-white px-2 py-0.5 rounded-full font-bold">CURRENT</span>`}
-                         </div>
-                         <div className="text-sm text-gray-300 font-medium line-clamp-2">"${entry.prompt || 'Initial State'}"</div>
-                         <div className="text-xs text-gray-500 mt-1">${Object.keys(entry.files).length} files</div>
-                      </div>
-                   `;
-               })}
-            </div>
-         </div>
-      </div>
-    `;
-  };
-
   window.VC = window.VC || {};
-  window.VC.Components = { Styles, Icon, SettingsModal, StatusBar, CodePreview, HistoryModal };
+  window.VC.Components = { Styles, Icon, SettingsModal, StatusBar, CodePreview };
 })();
