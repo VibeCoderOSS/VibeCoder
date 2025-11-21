@@ -77,46 +77,206 @@
     readAsDataURL,
 
     // --- PARSING DES LLM OUTPUTS ---
-    parseResponse: (text) => {
-      const result = { files: {}, patches: {}, thought: null };
+      parseResponse: (text) => {
+      const result = { files: {}, patches: {}, thought: null, usedFallback: false };
+
+      if (!text || typeof text !== "string") {
+        return result;
+      }
+
+      // Newlines normalisieren
+      text = text.replace(/\r\n/g, "\n");
 
       // optionaler <thinking> Block
       const thoughtMatch = text.match(/<thinking>([\s\S]*?)<\/thinking>/i);
       if (thoughtMatch) {
         result.thought = thoughtMatch[1].trim();
-        text = text.replace(thoughtMatch[0], '');
+        text = text.replace(thoughtMatch[0], "");
       }
 
-      // Vollstaendige Dateien: <!-- filename: name.ext -->
-      const fileRegex = /(?:<!--|\/\*)\s*filename:\s*([^\s]+?)\s*(?:-->|\*\/)([\s\S]*?)(?=(?:<!--|\/\*)\s*(?:filename|patch):|$)/gi;
+      // Helper um ```lang ... ``` zu entfernen
+      const stripCodeFence = (content) => {
+        return content
+          .replace(/^\s*```[a-zA-Z0-9]*\n?/, "")
+          .replace(/```\s*$/, "");
+      };
+
+      // PASS 1: Strikte Marker  <!-- filename: name.ext -->  /  <!-- patch: name.ext -->
+      const fileRegex =
+        /(?:<!--|\/\*)\s*filename:\s*([^\s]+?)\s*(?:-->| \*\/)([\s\S]*?)(?=(?:<!--|\/\*)\s*(?:filename|patch):|$)/gi;
       let match;
       while ((match = fileRegex.exec(text)) !== null) {
         const filename = match[1].trim();
         let content = match[2].trim();
-        content = content.replace(/^\s*```[a-zA-Z0-9]*\n?/, '').replace(/```\s*$/, '');
+        content = stripCodeFence(content);
         result.files[filename] = content;
       }
 
-      // Patches: <!-- patch: name.ext -->
-      const patchRegex = /(?:<!--|\/\*)\s*patch:\s*([^\s]+?)\s*(?:-->|\*\/)([\s\S]*?)(?=(?:<!--|\/\*)\s*(?:filename|patch):|$)/gi;
+      const patchRegex =
+        /(?:<!--|\/\*)\s*patch:\s*([^\s]+?)\s*(?:-->| \*\/)([\s\S]*?)(?=(?:<!--|\/\*)\s*(?:filename|patch):|$)/gi;
       while ((match = patchRegex.exec(text)) !== null) {
         const filename = match[1].trim();
         let content = match[2].trim();
-        content = content.replace(/^\s*```[a-zA-Z0-9]*\n?/, '').replace(/```\s*$/, '');
+        content = stripCodeFence(content);
         result.patches[filename] = content;
       }
 
-      // Fallback: reines HTML ohne Marker
-      if (Object.keys(result.files).length === 0 &&
-          Object.keys(result.patches).length === 0 &&
-          !result.thought) {
-        if (text.includes('<!DOCTYPE html>') || text.includes('<html')) {
-          result.files['index.html'] = text.trim();
+      if (
+        Object.keys(result.files).length > 0 ||
+        Object.keys(result.patches).length > 0
+      ) {
+        return result;
+      }
+
+      // PASS 2: Lockere Marker wie
+      //   <!-- index.html -->
+      //   <!-- styles.css -->
+      //   // index.html
+      //   // js/app.js
+      //   /* components.js */
+      const looseRegex =
+        /(?:<!--|\/\*+|\/\/+)\s*([^\s]+?\.(?:html|css|js|json|md))\s*(?:-->| \*\/)?([\s\S]*?)(?=(?:<!--|\/\*+|\/\/+)\s*[^\s]+?\.(?:html|css|js|json|md)\s*(?:-->| \*\/)?|$)/gi;
+
+      while ((match = looseRegex.exec(text)) !== null) {
+        const filename = match[1].trim();
+        let content = match[2].trim();
+        content = stripCodeFence(content);
+        if (content) {
+          result.files[filename] = content;
+        }
+      }
+
+      if (
+        Object.keys(result.files).length > 0 ||
+        Object.keys(result.patches).length > 0
+      ) {
+        return result;
+      }
+
+      // PASS 3: Code Fences wie ```html ... ```, ```css ... ```, ```javascript ... ```
+      const fenceRegex = /```(\w+)?\n([\s\S]*?)```/g;
+      const blocks = [];
+      let fenceMatch;
+      while ((fenceMatch = fenceRegex.exec(text)) !== null) {
+        const lang = (fenceMatch[1] || "").toLowerCase();
+        const code = fenceMatch[2];
+        blocks.push({ lang, code });
+      }
+
+      const inferFilesFromFences = (fenceBlocks) => {
+        const files = {};
+        if (!fenceBlocks || fenceBlocks.length === 0) return files;
+
+        // HTML Block finden
+        let htmlIndex = -1;
+        for (let i = 0; i < fenceBlocks.length; i++) {
+          const b = fenceBlocks[i];
+          if (b.lang === "html" || b.lang === "htm" || b.lang === "xml") {
+            htmlIndex = i;
+            break;
+          }
+          if (b.code.includes("<html") || b.code.includes("<!DOCTYPE html")) {
+            htmlIndex = i;
+            break;
+          }
+        }
+
+        const htmlBlock = htmlIndex >= 0 ? fenceBlocks[htmlIndex] : null;
+        let cssBlocks = [];
+        let jsBlocks = [];
+
+        fenceBlocks.forEach((b) => {
+          if (b.lang === "css") cssBlocks.push(b);
+          if (["js", "javascript", "jsx", "ts", "tsx"].includes(b.lang)) {
+            jsBlocks.push(b);
+          }
+        });
+
+        let cssNames = [];
+        let jsNames = [];
+
+        if (htmlBlock) {
+          const htmlName = "index.html";
+          const htmlCode = htmlBlock.code.trim();
+          files[htmlName] = htmlCode;
+
+          // Dateinamen aus <link href="...css"> und <script src="...js"> lesen
+          const cssRegex = /href=["']([^"']+\.css)["']/gi;
+          let m;
+          while ((m = cssRegex.exec(htmlCode)) !== null) {
+            cssNames.push(m[1]);
+          }
+
+          const jsRegex = /src=["']([^"']+\.js)["']/gi;
+          while ((m = jsRegex.exec(htmlCode)) !== null) {
+            jsNames.push(m[1]);
+          }
+        }
+
+        // CSS Blocks zuordnen
+        if (cssBlocks.length > 0) {
+          if (cssNames.length > 0) {
+            cssBlocks.forEach((b, idx) => {
+              const name = cssNames[idx] || cssNames[cssNames.length - 1];
+              files[name] = b.code.trim();
+            });
+          } else if (cssBlocks.length === 1) {
+            files["styles.css"] = cssBlocks[0].code.trim();
+          } else {
+            cssBlocks.forEach((b, idx) => {
+              const suffix = idx === 0 ? "" : String(idx + 1);
+              files[`styles${suffix}.css`] = b.code.trim();
+            });
+          }
+        }
+
+        // JS Blocks zuordnen
+        if (jsBlocks.length > 0) {
+          if (jsNames.length > 0) {
+            jsBlocks.forEach((b, idx) => {
+              const name = jsNames[idx] || jsNames[jsNames.length - 1];
+              files[name] = b.code.trim();
+            });
+          } else if (jsBlocks.length === 1) {
+            files["script.js"] = jsBlocks[0].code.trim();
+          } else {
+            jsBlocks.forEach((b, idx) => {
+              const suffix = idx === 0 ? "" : String(idx + 1);
+              files[`script${suffix}.js`] = b.code.trim();
+            });
+          }
+        }
+
+        return files;
+      };
+
+      if (blocks.length > 0) {
+        const filesFromFences = inferFilesFromFences(blocks);
+        if (Object.keys(filesFromFences).length > 0) {
+          Object.assign(result.files, filesFromFences);
+          return result;
+        }
+      }
+
+      // Fallback: reines HTML ohne Marker / Fences
+      if (
+        Object.keys(result.files).length === 0 &&
+        Object.keys(result.patches).length === 0
+      ) {
+        const htmlFallbackMatch = text.match(/<!DOCTYPE html|<html/i);
+        if (
+          htmlFallbackMatch &&
+          typeof htmlFallbackMatch.index === "number"
+        ) {
+          const idx = htmlFallbackMatch.index;
+          result.files["index.html"] = text.slice(idx).trim();
+          result.usedFallback = true;
         }
       }
 
       return result;
     },
+
 
     applyPatchesToFiles: (currentFiles, patches) => {
       const updatedFiles = { ...currentFiles };
@@ -126,6 +286,28 @@
         }
       }
       return updatedFiles;
+    },
+
+    // --- INJECT LIBRARY HELP ---
+    injectLibrary: (htmlContent, library) => {
+        if (!htmlContent) return htmlContent;
+        
+        const tag = library.type === 'css' 
+            ? `<link rel="stylesheet" href="${library.url}" />`
+            : `<script src="${library.url}"></script>`;
+        
+        // Try to inject before </head>
+        if (htmlContent.includes('</head>')) {
+            return htmlContent.replace('</head>', `  ${tag}\n</head>`);
+        } 
+        // Fallback: inject before </body>
+        else if (htmlContent.includes('</body>')) {
+            return htmlContent.replace('</body>', `  ${tag}\n</body>`);
+        }
+        // Fallback: append
+        else {
+            return htmlContent + '\n' + tag;
+        }
     },
 
     // --- PREVIEW GENERATION: baut ein eigenstaendiges HTML mit inline JS/CSS/IMAGES ---
@@ -208,11 +390,29 @@
         ''
       );
 
-      // Fehler und Point & Vibe Bridge
+      // Fehler und Point & Vibe Bridge + Console Capture
       const errorScript = `
         <script>
           (function() {
             window.__VC_POINT_VIBE_ENABLED__ = false;
+            
+            // Console Proxy
+            var originalLog = console.log;
+            var originalError = console.error;
+            
+            console.error = function() {
+                var args = Array.from(arguments);
+                originalError.apply(console, args);
+                try {
+                    if (window.parent) {
+                        window.parent.postMessage({
+                            type: 'iframe-error',
+                            message: args.map(String).join(' '),
+                            source: 'console'
+                        }, '*');
+                    }
+                } catch(e) {}
+            };
 
             window.addEventListener('message', function(event) {
               try {
