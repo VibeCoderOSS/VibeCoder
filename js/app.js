@@ -10,7 +10,25 @@
     const [local, setLocal] = useState(settings);
     const [models, setModels] = useState([]);
     
-    useEffect(() => { Utils.fetchModels(local.apiUrl).then(setModels); }, []);
+    useEffect(() => {
+        Utils.fetchModels(local.apiUrl).then(m => {
+            setModels(m);
+
+            if (m.length) {
+                setLocal(prev => {
+                    const ids = m.map(mod => mod.id);
+
+                    // Falls noch kein Modell gesetzt ist oder der Platzhalter nicht existiert:
+                    if (!prev.model || !ids.includes(prev.model)) {
+                        return { ...prev, model: m[0].id };
+                    }
+
+                    return prev;
+                });
+            }
+        });
+    }, [local.apiUrl]);
+
 
     return html`
       <div className="fixed inset-0 flex items-center justify-center bg-gray-950 text-white z-50">
