@@ -5,6 +5,8 @@
 Generate, patch and rewrite files directly in the browser with a live preview.  
 Runs fully locally from `index.html`. No build steps. No node_modules. Just vibe.
 
+
+
 > ⚠️ Status: VibeCoder is **work in progress**.  
 > Expect rough edges, missing features and breaking changes while things evolve.
 
@@ -27,6 +29,10 @@ Runs fully locally from `index.html`. No build steps. No node_modules. Just vibe
 ---
 
 ## 🚀 Requirements
+
+LLM:
+Use at least a 20b model. Everything below that will probably fail to adhere to the system prompt. 
+I am working on making the parser more robust, so that smaller models which don't adhere to the system prompt in detail will still work.
 
 Before you use VibeCoder, you **must** have:
 
