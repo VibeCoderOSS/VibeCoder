@@ -34,6 +34,7 @@ LLM:
 
 Use **at least a 20b model**. Everything below that will probably fail to adhere to the system prompt. 
 I am working on making the parser more robust, so that smaller models, which don't adhere to the system prompt in detail will still work.
+If you want to play with smaller models, set the temperature lower in the settings!
 
 Before you use VibeCoder, you **must** have:
 
