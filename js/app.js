@@ -1,8 +1,7 @@
-// js/app.js
 (function() {
   const html = htm.bind(React.createElement);
   const { useState, useEffect, useRef, useCallback } = React;
-  const { Styles, Icon, SettingsModal, StatusBar, CodePreview } = window.VC.Components;
+  const { Styles, Icon, SettingsModal, StatusBar, CodePreview, HistoryModal } = window.VC.Components;
   const Utils = window.VC.Utils;
 
   // --- SETUP SCREEN ---
@@ -84,12 +83,24 @@
     const [statusMsg, setStatusMsg] = useState('');
     const [viewMode, setViewMode] = useState('preview');
     const [showSettings, setShowSettings] = useState(false);
+    const [showHistory, setShowHistory] = useState(false);
+    
     const [streamText, setStreamText] = useState('');
     const [runtimeError, setRuntimeError] = useState(null);
     const [activeFile, setActiveFile] = useState('index.html');
-    const [pointEvents, setPointEvents] = useState([]); // Point & Vibe Klicks
+    const [pointEvents, setPointEvents] = useState([]); 
+
+    // Version History & Modification Tracking
+    const [history, setHistory] = useState([]); // Array of { files, timestamp, prompt }
+    const [currentVersionIndex, setCurrentVersionIndex] = useState(-1); // -1 means latest (working copy)
+    const [modifiedFiles, setModifiedFiles] = useState([]);
+    const [showScrollButton, setShowScrollButton] = useState(false);
 
     const msgsEndRef = useRef(null);
+    const chatContainerRef = useRef(null);
+    // Track if user is at bottom using a Ref to avoid closure staleness and layout thrashing issues
+    const isAtBottomRef = useRef(true);
+    
     const abortControllerRef = useRef(null);
     
     // Refs for safe async operations
@@ -99,7 +110,37 @@
     useEffect(() => { filesRef.current = files; }, [files]);
     useEffect(() => { dirHandleRef.current = dirHandle; }, [dirHandle]);
 
-    useEffect(() => { msgsEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, streamText, appStatus]);
+    // --- SMART AUTO-SCROLLING ---
+    
+    // 1. Always scroll to bottom when a new message is added or status changes
+    useEffect(() => { 
+        // Force bottom stickiness on new message start
+        isAtBottomRef.current = true;
+        msgsEndRef.current?.scrollIntoView({ behavior: 'smooth' }); 
+    }, [messages.length, appStatus]);
+
+    // 2. Only scroll during streaming if the user WAS at the bottom before the update
+    useEffect(() => {
+        if (isAtBottomRef.current) {
+             // Use 'auto' instead of 'smooth' during streaming to prevent "fighting" the user's scroll
+             msgsEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
+        }
+    }, [streamText]);
+
+    // 3. Track scroll position during scrolling
+    const handleChatScroll = () => {
+        const container = chatContainerRef.current;
+        if (!container) return;
+        const { scrollHeight, scrollTop, clientHeight } = container;
+        const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
+        
+        // Update sticky state based on current position
+        // Tolerance of 40px allows for minor pixel differences
+        const isNearBottom = distanceFromBottom < 40;
+        isAtBottomRef.current = isNearBottom;
+
+        setShowScrollButton(!isNearBottom);
+    };
     
     // Handle iframe runtime errors und Point Events
     useEffect(() => {
@@ -197,6 +238,7 @@ RULES:
 - If you are unsure about the context for a patch, REWRITE the file.
 `;
 
+
     const handleFileSelect = async (e) => {
         const selected = Array.from(e.target.files);
         if (!selected.length) return;
@@ -247,6 +289,15 @@ RULES:
             setStreamText(prev => prev + '\n[Stopped by user]');
         }
     };
+    
+    const handleRestoreHistory = (index) => {
+        const entry = history[index];
+        if (entry) {
+            setFiles(entry.files);
+            setModifiedFiles([]);
+            setMessages(prev => [...prev, { role: 'assistant', content: `Restored version from ${new Date(entry.timestamp).toLocaleTimeString()}` }]);
+        }
+    };
 
     const handleSend = async () => {
       // If generating, stop instead
@@ -256,6 +307,16 @@ RULES:
       }
 
       if ((!input.trim() && !attachments.length)) return;
+      
+      // SNAPSHOT HISTORY BEFORE CHANGES
+      if (Object.keys(files).length > 0) {
+         setHistory(prev => [...prev, { 
+             timestamp: Date.now(), 
+             files: JSON.parse(JSON.stringify(files)), 
+             prompt: input || "Upload" 
+         }]);
+         setCurrentVersionIndex(history.length); // point to new entry
+      }
       
       // 1. Process Attachments und speichern ins Projekt
       const newFiles = {};
@@ -413,14 +474,25 @@ RULES:
         let nextFiles = Utils.applyPatchesToFiles({ ...files, ...newFiles }, parsed.patches);
         nextFiles = { ...nextFiles, ...parsed.files };
         
+        // Identify modified files
+        const changes = [];
+        Object.keys(nextFiles).forEach(key => {
+            if (files[key] !== nextFiles[key]) changes.push(key);
+        });
+        setModifiedFiles(changes);
+
         if (Object.keys(nextFiles).length > 0) {
             setFiles(nextFiles);
             setViewMode('preview');
         }
         
-        const finalMsgContent = parsed.thought 
+        let finalMsgContent = parsed.thought 
             ? `**Plan:** ${parsed.thought}\n\n${fullText.replace(/<thinking>[\s\S]*?<\/thinking>/, '').trim()}`
             : fullText;
+
+        if (parsed.usedFallback) {
+            finalMsgContent += "\n\n⚠️ **Note:** The model output was unstructured. I applied a fallback parser to extract the code (assumed `index.html`).";
+        }
 
         setMessages(prev => [...prev, { role: 'assistant', content: finalMsgContent }]);
 
@@ -454,7 +526,7 @@ RULES:
       <div className="flex w-screen h-screen text-gray-200 font-sans overflow-hidden bg-gray-950">
         
         <!-- SIDEBAR -->
-        <div className="w-[400px] flex flex-col border-r border-gray-800 bg-gray-950 z-10 shadow-xl flex-shrink-0">
+        <div className="w-[400px] flex flex-col border-r border-gray-800 bg-gray-950 z-10 shadow-xl flex-shrink-0 relative">
            <div className="h-14 flex items-center justify-between px-4 border-b border-gray-800 bg-gray-950/50 backdrop-blur-sm">
               <div className="flex items-center gap-3">
                  <div className="w-5 h-5 rounded-full liquid-orb"></div>
@@ -466,7 +538,7 @@ RULES:
               <button onClick=${() => setShowSettings(true)} className="text-gray-500 hover:text-white transition"><${Icon} name="Settings" /></button>
            </div>
 
-           <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
+           <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar" ref=${chatContainerRef} onScroll=${handleChatScroll}>
               ${messages.map((m, i) => html`
                  <div key=${i} className=${`flex flex-col ${m.role === 'user' ? 'items-end' : 'items-start'}`}>
                     <div className=${`max-w-[90%] rounded-xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap break-words shadow-sm ${
@@ -492,6 +564,17 @@ RULES:
               `}
               <div ref=${msgsEndRef}></div>
            </div>
+           
+           <!-- Floating Scroll Button -->
+           ${showScrollButton && html`
+              <button 
+                  onClick=${() => msgsEndRef.current?.scrollIntoView({ behavior: 'smooth' })}
+                  className="absolute bottom-[220px] right-6 p-2 bg-gray-800 border border-gray-700 text-white rounded-full shadow-lg shadow-black/50 hover:bg-gray-700 transition z-20"
+                  title="Scroll to Bottom"
+              >
+                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
+              </button>
+           `}
 
            <!-- STATUS BAR AREA -->
            <div className="bg-gray-950 border-t border-gray-800">
@@ -602,6 +685,8 @@ RULES:
               viewMode=${viewMode} 
               setViewMode=${setViewMode} 
               onFileChange=${(f, c) => setFiles({...files, [f]: c})} 
+              modifiedFiles=${modifiedFiles}
+              onOpenHistory=${() => setShowHistory(true)}
            />
         </div>
 
@@ -611,6 +696,14 @@ RULES:
            settings=${settings} 
            onSave=${s => setSettings(s)} 
            systemPromptPreview=${getSystemPrompt()}
+        />
+
+        <${HistoryModal}
+            isOpen=${showHistory}
+            onClose=${() => setShowHistory(false)}
+            history=${history}
+            currentVersionIndex=${currentVersionIndex}
+            onRestore=${handleRestoreHistory}
         />
       </div>
     `;

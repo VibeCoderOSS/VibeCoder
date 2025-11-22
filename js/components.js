@@ -1,4 +1,3 @@
-// js/components.js
 (function() {
   const html = htm.bind(React.createElement);
   const { useState, useEffect, useRef, useLayoutEffect } = React;
@@ -78,7 +77,14 @@
       Image: '<rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline>',
       Close: '<line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line>',
       Trash: '<polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>',
-      Target: '<circle cx="12" cy="12" r="8"></circle><circle cx="12" cy="12" r="4"></circle><line x1="12" y1="2" x2="12" y2="5"></line><line x1="12" y1="19" x2="12" y2="22"></line><line x1="2" y1="12" x2="5" y2="12"></line><line x1="19" y1="12" x2="22" y2="12"></line>'
+      Target: '<circle cx="12" cy="12" r="8"></circle><circle cx="12" cy="12" r="4"></circle><line x1="12" y1="2" x2="12" y2="5"></line><line x1="12" y1="19" x2="12" y2="22"></line><line x1="2" y1="12" x2="5" y2="12"></line><line x1="19" y1="12" x2="22" y2="12"></line>',
+      Clock: '<circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline>',
+      Package: '<line x1="16.5" y1="9.4" x2="7.5" y2="4.21"></line><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line>',
+      Undo: '<path d="M3 7v6h6"></path><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"></path>',
+      Smartphone: '<rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect><line x1="12" y1="18" x2="12.01" y2="18"></line>',
+      Tablet: '<rect x="4" y="2" width="16" height="20" rx="2" ry="2"></rect><line x1="12" y1="18" x2="12.01" y2="18"></line>',
+      Monitor: '<rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line>',
+      Rotate: '<path d="M23 4v6h-6"></path><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>'
     };
     return html`<svg width=${size} height=${size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className=${className} dangerouslySetInnerHTML=${{__html: paths[name] || ''}}></svg>`;
   };
@@ -107,11 +113,15 @@
   };
 
   // --- CODE PREVIEW ---
-  const CodePreview = ({ files, activeFile, setActiveFile, viewMode, setViewMode, onFileChange }) => {
+  const CodePreview = ({ files, activeFile, setActiveFile, viewMode, setViewMode, onFileChange, modifiedFiles = [], onOpenHistory }) => {
     const [iframeUrl, setIframeUrl] = useState(null);
     const [isPlaying, setIsPlaying] = useState(true);
-    const [scale, setScale] = useState('fit'); 
+    
+    // Responsive State
+    const [deviceMode, setDeviceMode] = useState('full'); // full | mobile | tablet | desktop
+    const [orientation, setOrientation] = useState('portrait'); // portrait | landscape
     const [scaleFactor, setScaleFactor] = useState(1);
+    
     const [copied, setCopied] = useState(false);
     const [pointMode, setPointMode] = useState(false);
     const cleanupRef = useRef(null);
@@ -145,6 +155,7 @@
         const fullPath = prefix ? prefix + '/' + name : name;
         if (node.isFile) {
           const isActive = activeFile === fullPath;
+          const isModified = modifiedFiles.includes(fullPath);
           return html`
             <button
               key=${fullPath}
@@ -153,8 +164,11 @@
                 isActive ? 'bg-gray-800 text-white' : 'text-gray-300 hover:bg-gray-800/60'
               }`}
             >
-              <span className=${`w-1.5 h-1.5 rounded-full ${isActive ? 'bg-purple-400' : 'bg-gray-600'}`}></span>
-              <span className="truncate">${name}</span>
+              <span className=${`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+                  isModified ? 'bg-yellow-400 animate-pulse' : (isActive ? 'bg-purple-400' : 'bg-gray-600')
+              }`}></span>
+              <span className=${`truncate ${isModified ? 'text-yellow-100' : ''}`}>${name}</span>
+              ${isModified && html`<span className="text-[9px] text-yellow-500 ml-auto font-bold">MOD</span>`}
             </button>
           `;
         } else {
@@ -217,28 +231,52 @@
       }
     }, [pointMode, iframeUrl, viewMode]);
 
-    // Handle Intelligent Scaling
+    // --- INTELLIGENT RESPONSIVE SCALING ---
+    // Berechnet den Scale-Faktor, damit das simulierte Gerät (z.B. 1280px Desktop)
+    // in den kleinen Vorschau-Container passt.
     useLayoutEffect(() => {
       if (viewMode !== 'preview' || !containerRef.current) return;
 
-      const updateScale = () => {
-        if (scale === 'fit') {
-           const containerWidth = containerRef.current.offsetWidth;
-           const baseWidth = 1280; 
-           let ratio = (containerWidth - 64) / baseWidth; 
-           if (ratio > 1) ratio = 1;
-           setScaleFactor(ratio);
-        } else {
-           setScaleFactor(parseFloat(scale));
-        }
+      const calculateScale = () => {
+         const wrapper = containerRef.current;
+         const availWidth = wrapper.offsetWidth - 40; // 20px padding each side
+         const availHeight = wrapper.offsetHeight - 40; 
+         
+         let targetWidth, targetHeight;
+
+         if (deviceMode === 'full') {
+            // Im Full mode nutzen wir einfach 100%, kein scaling nötig.
+            setScaleFactor(1);
+            return;
+         }
+
+         // Device definitions
+         if (deviceMode === 'mobile') {
+            targetWidth = orientation === 'portrait' ? 375 : 667;
+            targetHeight = orientation === 'portrait' ? 667 : 375;
+         } else if (deviceMode === 'tablet') {
+            targetWidth = orientation === 'portrait' ? 768 : 1024;
+            targetHeight = orientation === 'portrait' ? 1024 : 768;
+         } else if (deviceMode === 'desktop') {
+            targetWidth = 1280;
+            targetHeight = 800;
+         }
+
+         // Scale calculation: Fit target into available space
+         const scaleX = availWidth / targetWidth;
+         const scaleY = availHeight / targetHeight;
+         
+         // Wir skalieren nur runter, nie hoch (pixelig)
+         const scale = Math.min(1, scaleX, scaleY);
+         setScaleFactor(scale);
       };
 
-      const observer = new ResizeObserver(updateScale);
+      const observer = new ResizeObserver(calculateScale);
       observer.observe(containerRef.current);
-      updateScale(); 
+      calculateScale(); 
 
       return () => observer.disconnect();
-    }, [scale, viewMode]);
+    }, [deviceMode, orientation, viewMode]);
 
     const handleReload = () => {
       setIsPlaying(false);
@@ -263,8 +301,26 @@
       a.click();
     };
 
-    const scaledWidth = scale === 'fit' ? '1280px' : (scale === '1' ? '100%' : `${100/scaleFactor}%`);
-    const scaledHeight = scale === '1' ? '100%' : `${100/scaleFactor}%`;
+    // Helper: Get dimensions for the iframe container
+    const getContainerStyle = () => {
+        if (deviceMode === 'full') return { width: '100%', height: '100%', border: 'none' };
+
+        let width, height;
+        if (deviceMode === 'mobile') { width = orientation === 'portrait' ? 375 : 667; height = orientation === 'portrait' ? 667 : 375; }
+        else if (deviceMode === 'tablet') { width = orientation === 'portrait' ? 768 : 1024; height = orientation === 'portrait' ? 1024 : 768; }
+        else if (deviceMode === 'desktop') { width = 1280; height = 800; }
+
+        return {
+            width: `${width}px`,
+            height: `${height}px`,
+            transform: `scale(${scaleFactor})`,
+            transformOrigin: 'center center',
+            transition: 'all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1)',
+            boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)',
+            borderRadius: deviceMode === 'mobile' ? '24px' : (deviceMode === 'tablet' ? '16px' : '8px'),
+            overflow: 'hidden' // clip iframe corners
+        };
+    };
 
     return html`
       <div className="flex flex-col h-full bg-gray-900">
@@ -272,55 +328,65 @@
         <div className="h-14 bg-gray-900 border-b border-gray-800 flex items-center justify-between px-4 flex-shrink-0 shadow-sm z-20">
            
            <!-- View Toggle -->
-           <div className="flex bg-gray-950 p-1 rounded-lg border border-gray-800 mr-4">
+           <div className="flex bg-gray-950 p-1 rounded-lg border border-gray-800 mr-4 flex-shrink-0">
              <button onClick=${() => setViewMode('preview')} className=${`flex items-center gap-2 px-3 py-1.5 rounded text-xs font-medium transition ${viewMode === 'preview' ? 'bg-gray-800 text-white shadow-sm' : 'text-gray-500 hover:text-white'}`}><${Icon} name="Eye" size=${14} /> Preview</button>
              <button onClick=${() => setViewMode('code')} className=${`flex items-center gap-2 px-3 py-1.5 rounded text-xs font-medium transition ${viewMode === 'code' ? 'bg-gray-800 text-white shadow-sm' : 'text-gray-500 hover:text-white'}`}><${Icon} name="Code" size=${14} /> Code</button>
            </div>
 
            <!-- Preview Controls -->
            ${viewMode === 'preview' && html`
-              <div className="flex items-center gap-3 px-3 border-l border-r border-gray-800 mx-2">
+              <div className="flex items-center gap-2 px-3 border-l border-r border-gray-800 mx-2 overflow-x-auto no-scrollbar">
+                 
+                 <div className="flex bg-gray-950 p-1 rounded-lg border border-gray-800 mr-2 flex-shrink-0">
+                    <button onClick=${() => setDeviceMode('mobile')} className=${`p-1.5 rounded transition ${deviceMode === 'mobile' ? 'bg-gray-800 text-blue-400' : 'text-gray-500 hover:text-gray-300'}`} title="Mobile (375px)">
+                        <${Icon} name="Smartphone" size=${16} />
+                    </button>
+                    <button onClick=${() => setDeviceMode('tablet')} className=${`p-1.5 rounded transition ${deviceMode === 'tablet' ? 'bg-gray-800 text-blue-400' : 'text-gray-500 hover:text-gray-300'}`} title="Tablet (768px)">
+                        <${Icon} name="Tablet" size=${16} />
+                    </button>
+                    <button onClick=${() => setDeviceMode('desktop')} className=${`p-1.5 rounded transition ${deviceMode === 'desktop' ? 'bg-gray-800 text-blue-400' : 'text-gray-500 hover:text-gray-300'}`} title="Desktop (1280px)">
+                        <${Icon} name="Monitor" size=${16} />
+                    </button>
+                     <button onClick=${() => setDeviceMode('full')} className=${`p-1.5 rounded transition ${deviceMode === 'full' ? 'bg-gray-800 text-blue-400' : 'text-gray-500 hover:text-gray-300'}`} title="Full Width">
+                        <div className="w-4 h-4 border-2 border-current rounded-sm"></div>
+                    </button>
+                 </div>
+
+                 ${deviceMode !== 'full' && deviceMode !== 'desktop' && html`
+                    <button onClick=${() => setOrientation(o => o === 'portrait' ? 'landscape' : 'portrait')} className="p-2 text-gray-500 hover:text-white bg-gray-950 hover:bg-gray-800 border border-gray-800 rounded transition mr-2" title="Rotate">
+                        <${Icon} name="Rotate" size=${16} />
+                    </button>
+                 `}
+
+                 <div className="w-[1px] h-6 bg-gray-800 mx-2"></div>
+
                  <button onClick=${() => setIsPlaying(!isPlaying)} className=${`p-2 rounded transition ${isPlaying ? 'text-blue-400 hover:bg-blue-500/10' : 'text-gray-500 hover:text-gray-300'}`} title=${isPlaying ? "Pause" : "Play"}>
                     <${Icon} name=${isPlaying ? "Pause" : "Play"} size=${18} />
                  </button>
                  <button onClick=${handleReload} className="p-2 text-gray-400 hover:text-white hover:bg-gray-800 rounded transition" title="Reload">
                     <${Icon} name="Refresh" size=${18} />
                  </button>
+                 
                  <button 
                     onClick=${() => setPointMode(v => !v)} 
-                    className=${`flex items-center gap-1 px-2 py-1 rounded text-[10px] uppercase tracking-wide font-semibold transition ${
-                      pointMode ? 'bg-purple-600/20 text-purple-200 border border-purple-500/60' : 'text-gray-500 hover:text-gray-200 border border-transparent hover:border-gray-700'
+                    className=${`flex items-center gap-1 px-2 py-1 rounded text-[10px] uppercase tracking-wide font-semibold transition flex-shrink-0 border ${
+                      pointMode ? 'bg-purple-600/20 text-purple-200 border-purple-500/60' : 'text-gray-500 hover:text-gray-200 border-transparent hover:border-gray-700'
                     }`}
                     title="Point & Vibe"
                  >
                     <${Icon} name="Target" size=${14} />
-                    <span className="hidden md:inline">Point & Vibe</span>
                  </button>
-                 <div className="flex items-center gap-2 ml-2">
-                    <span className="text-[10px] uppercase text-gray-600 font-bold">Zoom</span>
-                    <select 
-                       value=${scale} 
-                       onChange=${e => setScale(e.target.value)} 
-                       className="bg-gray-950 border border-gray-800 text-xs text-gray-300 rounded px-2 py-1 outline-none hover:border-gray-600 focus:border-purple-500 transition"
-                    >
-                       <option value="fit">Fit Window</option>
-                       <option value="1">100%</option>
-                       <option value="0.75">75%</option>
-                       <option value="0.5">50%</option>
-                    </select>
-                 </div>
               </div>
            `}
 
-           <!-- Code View Mitte jetzt leer fuer sauberere Optik -->
-           ${viewMode === 'code' && html`
-             <div className="flex-1 mx-2 text-xs text-gray-600 italic">
-                <!-- Code editor uses sidebar tree rechts -->
-             </div>
-           `}
+            <div className="flex-1"></div>
 
            <!-- Actions -->
-           <div className="flex items-center gap-1 pl-4 ml-auto">
+           <div className="flex items-center gap-2 pl-2 flex-shrink-0">
+             <button onClick=${onOpenHistory} className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium bg-gray-800 hover:bg-gray-700 text-gray-300 rounded border border-gray-700 transition" title="History">
+                <${Icon} name="Clock" size=${14} /> <span className="hidden lg:inline">History</span>
+             </button>
+             <div className="w-[1px] h-6 bg-gray-800 mx-1"></div>
              <button onClick=${handleCopy} className="p-2 text-gray-400 hover:text-white hover:bg-gray-800 rounded transition" title="Copy Code">
                 <${Icon} name="Copy" size=${16} className=${copied ? "text-green-500" : ""} />
              </button>
@@ -338,34 +404,31 @@
                  <p>Ready to build.</p>
               </div>
            ` : viewMode === 'preview' ? html`
-              <div className=${`relative w-full h-full flex flex-col items-center bg-gray-800/50 overflow-hidden ${scale !== '1' ? 'py-8' : ''}`}>
+              <div className="relative w-full h-full flex items-center justify-center bg-gray-800/50 overflow-hidden">
                   ${pointMode && html`
                     <div className="pointer-events-none absolute top-4 right-4 z-30 bg-purple-950/90 text-[11px] text-purple-50 px-3 py-1.5 rounded-full border border-purple-500/70 shadow-lg flex items-center gap-2">
                        <${Icon} name="Target" size=${14} />
-                       <span>Point & Vibe aktiv, klicke ins Preview.</span>
+                       <span>Point & Vibe aktiv</span>
                     </div>
                   `}
-                  <!-- Scaled Container -->
-                  <div style=${{
-                      width: scaledWidth,
-                      height: scaledHeight, 
-                      transform: `scale(${scaleFactor})`,
-                      transformOrigin: 'top center',
-                      transition: 'transform 0.2s ease-out, width 0.2s ease-out',
-                      boxShadow: scale === '1' ? 'none' : '0 20px 50px rgba(0,0,0,0.5)',
-                      overflow: 'hidden',
-                      borderRadius: scale === '1' ? '0' : '8px',
-                      backgroundColor: 'white'
-                  }}>
+                  
+                  <!-- Device Wrapper -->
+                  <div style=${getContainerStyle()}>
                     ${isPlaying && iframeUrl ? html`
-                        <iframe ref=${iframeRef} src=${iframeUrl} className="w-full h-full border-none bg-white rounded-md" sandbox="allow-scripts allow-modals allow-forms allow-same-origin allow-popups"></iframe>
+                        <iframe key=${iframeUrl} ref=${iframeRef} src=${iframeUrl} className="w-full h-full border-none bg-white" sandbox="allow-scripts allow-modals allow-forms allow-same-origin allow-popups"></iframe>
                     ` : html`
-                        <div className="w-full h-full flex items-center justify-center bg-gray-900 text-gray-500 flex-col border border-gray-700 rounded-md">
+                        <div className="w-full h-full flex items-center justify-center bg-gray-900 text-gray-500 flex-col border border-gray-700">
                              <div className="p-6 rounded-full bg-gray-800 mb-4"><${Icon} name="Pause" size=${48} /></div>
                              <p className="text-lg font-medium">Preview Paused</p>
                         </div>
                     `}
                   </div>
+                  
+                  ${deviceMode !== 'full' && html`
+                      <div className="absolute bottom-4 px-3 py-1 bg-gray-900/80 text-[10px] text-gray-400 rounded-full backdrop-blur border border-gray-800">
+                         ${Math.round(scaleFactor * 100)}% Scale
+                      </div>
+                  `}
               </div>
            ` : html`
               <div className="flex w-full h-full">
@@ -509,6 +572,47 @@
     `;
   };
 
+  // --- HISTORY MODAL ---
+  const HistoryModal = ({ isOpen, onClose, history, currentVersionIndex, onRestore }) => {
+    if (!isOpen) return null;
+
+    return html`
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
+         <div className="bg-gray-900 border border-gray-800 rounded-xl w-[600px] max-w-[95%] h-[80vh] shadow-2xl overflow-hidden flex flex-col">
+            <div className="p-4 border-b border-gray-800 flex justify-between items-center">
+               <h3 className="font-bold text-white flex items-center gap-2"><${Icon} name="Clock" /> Version History</h3>
+               <button onClick=${onClose}><${Icon} name="Close" /></button>
+            </div>
+            <div className="flex-1 overflow-y-auto custom-scrollbar p-4 space-y-3">
+               ${history.length === 0 && html`<div className="text-center text-gray-500 py-10">No history yet. Make some changes!</div>`}
+               ${history.slice().reverse().map((entry, revIndex) => {
+                   const realIndex = history.length - 1 - revIndex;
+                   const isCurrent = realIndex === currentVersionIndex;
+                   return html`
+                      <div key=${realIndex} className=${`p-4 rounded-lg border transition relative ${isCurrent ? 'bg-purple-900/20 border-purple-500/50' : 'bg-gray-950 border-gray-800 hover:border-gray-600'}`}>
+                         <div className="flex justify-between items-start mb-2">
+                            <div>
+                               <span className="text-xs font-mono text-gray-500">#${realIndex + 1}</span>
+                               <span className="text-xs text-gray-400 ml-2">${new Date(entry.timestamp).toLocaleTimeString()}</span>
+                            </div>
+                            ${!isCurrent && html`
+                                <button onClick=${() => { onRestore(realIndex); onClose(); }} className="text-xs bg-gray-800 hover:bg-gray-700 text-gray-200 px-2 py-1 rounded border border-gray-700 flex items-center gap-1">
+                                   <${Icon} name="Undo" size=${12} /> Restore
+                                </button>
+                            `}
+                            ${isCurrent && html`<span className="text-[10px] bg-purple-500 text-white px-2 py-0.5 rounded-full font-bold">CURRENT</span>`}
+                         </div>
+                         <div className="text-sm text-gray-300 font-medium line-clamp-2">"${entry.prompt || 'Initial State'}"</div>
+                         <div className="text-xs text-gray-500 mt-1">${Object.keys(entry.files).length} files</div>
+                      </div>
+                   `;
+               })}
+            </div>
+         </div>
+      </div>
+    `;
+  };
+
   window.VC = window.VC || {};
-  window.VC.Components = { Styles, Icon, SettingsModal, StatusBar, CodePreview };
+  window.VC.Components = { Styles, Icon, SettingsModal, StatusBar, CodePreview, HistoryModal };
 })();
