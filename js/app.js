@@ -4,8 +4,87 @@
   const { Styles, Icon, SettingsModal, StatusBar, CodePreview, HistoryModal } = window.VC.Components;
   const Utils = window.VC.Utils;
 
+  // --- DEFAULT TEMPLATE FOR VIRTUAL MODE ---
+  const DEFAULT_TEMPLATE = {
+    'index.html': `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VibeCoder Project</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <h1>✨ Ready to Vibe</h1>
+      <p>Your virtual environment is set up.</p>
+      <button id="btn">Click me</button>
+    </div>
+  </div>
+  <script src="script.js"></script>
+</body>
+</html>`,
+    'styles.css': `body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background-color: #0f0f12;
+  color: #e2e8f0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100vh;
+  margin: 0;
+}
+
+.card {
+  background: #1e1e24;
+  padding: 2rem;
+  border-radius: 1rem;
+  border: 1px solid #2d2d35;
+  text-align: center;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+}
+
+h1 {
+  background: linear-gradient(135deg, #a855f7, #3b82f6);
+  -webkit-background-clip: text;
+  color: transparent;
+  margin-bottom: 0.5rem;
+}
+
+p { color: #94a3b8; margin-bottom: 1.5rem; }
+
+button {
+  background: #3b82f6;
+  color: white;
+  border: none;
+  padding: 0.75rem 1.5rem;
+  border-radius: 0.5rem;
+  cursor: pointer;
+  font-weight: 500;
+  transition: all 0.2s;
+}
+
+button:hover { background: #2563eb; transform: translateY(-1px); }
+button:active { transform: translateY(1px); }`,
+    'script.js': `document.getElementById('btn').addEventListener('click', () => {
+  const btn = document.getElementById('btn');
+  btn.textContent = 'Vibe Checked ✅';
+  confetti({
+    particleCount: 100,
+    spread: 70,
+    origin: { y: 0.6 }
+  });
+});
+
+// Simple confetti polyfill or placeholder if not present
+if (typeof confetti === 'undefined') {
+  window.confetti = () => alert('Vibe Checked! ✅ (Imagine confetti here)');
+}`
+  };
+
   // --- SETUP SCREEN ---
-  const SetupScreen = ({ settings, onSave, onSelectDir }) => {
+  const SetupScreen = ({ settings, onSave, onSelectDir, onVirtual }) => {
     const [local, setLocal] = useState(settings);
     const [models, setModels] = useState([]);
     
@@ -51,7 +130,7 @@
                   }} className="w-full py-3 bg-blue-600 hover:bg-blue-500 rounded-lg font-medium flex items-center justify-center gap-2 shadow-lg shadow-blue-900/20 transition transform active:scale-95">
                     <${Icon} name="Folder" /> Open Project Folder
                   </button>
-                  <button onClick=${() => onSave(local)} className="w-full py-3 bg-gray-800 hover:bg-gray-700 rounded-lg font-medium text-gray-400 border border-gray-700 hover:border-gray-600 transition">
+                  <button onClick=${() => onVirtual(local)} className="w-full py-3 bg-gray-800 hover:bg-gray-700 rounded-lg font-medium text-gray-400 border border-gray-700 hover:border-gray-600 transition">
                     Use Virtual Filesystem
                   </button>
                </div>
@@ -510,16 +589,27 @@ RULES:
       }
     };
 
-    if (!setupDone) return html`<${Styles} /><${SetupScreen} settings=${settings} onSave=${s => { setSettings(s); setSetupDone(true); }} onSelectDir=${async () => {
-        const h = await Utils.getDirHandle();
-        if(h) {
-            setDirHandle(h);
-            const fs = await Utils.readFiles(h);
-            if(Object.keys(fs).length) setFiles(fs);
-            return h;
-        }
-        return null;
-    }} />`;
+    if (!setupDone) return html`
+        <${Styles} />
+        <${SetupScreen} 
+            settings=${settings} 
+            onSave=${s => { setSettings(s); setSetupDone(true); }} 
+            onVirtual=${s => {
+                setSettings(s);
+                setFiles(DEFAULT_TEMPLATE);
+                setSetupDone(true);
+            }}
+            onSelectDir=${async () => {
+                const h = await Utils.getDirHandle();
+                if(h) {
+                    setDirHandle(h);
+                    const fs = await Utils.readFiles(h);
+                    if(Object.keys(fs).length) setFiles(fs);
+                    return h;
+                }
+                return null;
+            }} 
+        />`;
 
     return html`
       <${Styles} />
