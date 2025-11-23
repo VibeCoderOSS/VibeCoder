@@ -32,8 +32,8 @@ Runs fully locally from `index.html`. No build steps. No node_modules. Just vibe
 
 LLM: 
 
-Use **at least a 20b model**. Everything below that will probably fail to adhere to the system prompt. 
-I am working on making the parser more robust, so that smaller models, which don't adhere to the system prompt in detail will still work.
+Preferably use **at least a 20b model**. Models below that will sometimes fail to adhere to the system prompt. 
+The newest version kind of works with Qwen3 4b Thinking 2507 but your success rate may vary a bit. 
 If you want to play with smaller models, set the temperature lower in the settings!
 
 The Qwen models generally seem to work nicely! So I'd advice to use Qwen 3 30b MoE (Coder/ VL/ Thinker/ Instruct).
