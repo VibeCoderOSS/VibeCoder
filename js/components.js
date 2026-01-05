@@ -113,7 +113,6 @@
   };
 
   const ChatMessage = ({ message, msg }) => {
-    const [thinkingOpen, setThinkingOpen] = useState(false);
     const m = message || msg;
     if (!m) return null;
     const role = m.role || 'assistant';
@@ -121,6 +120,12 @@
     const thinking = (m.thinking || '').toString();
     const output = (m.output != null ? m.output : (m.content || '')).toString();
     const isStreaming = !!m.isStreaming;
+    const [thinkingOpen, setThinkingOpen] = useState(isStreaming && thinking.length > 0);
+
+    // Auto-open thinking when it starts streaming
+    useEffect(() => {
+        if (isStreaming && thinking.length > 0 && thinking.length < 50) setThinkingOpen(true);
+    }, [isStreaming, thinking]);
 
     if (isUser) {
       return html`
@@ -133,23 +138,28 @@
     }
 
     const hasThinking = thinking.trim().length > 0;
-    const thinkingHint = thinking.replace(/\s+/g, ' ').slice(-90);
+    const thinkingHint = thinking.replace(/\s+/g, ' ').slice(-60);
 
     return html`
-      <div className="flex flex-col items-start">
-        <div className="max-w-[90%] rounded-xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap break-words shadow-sm bg-gray-900 border border-gray-800 text-gray-300 rounded-bl-none">
+      <div className="flex flex-col items-start w-full">
+        <div className="max-w-[95%] w-full rounded-xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap break-words shadow-sm bg-gray-900 border border-gray-800 text-gray-300 rounded-bl-none">
           ${hasThinking && html`
-            <div className="mb-2 pb-2 border-b border-gray-800">
+            <div className="mb-3">
               <button
-                className="w-full flex items-center gap-2 text-[11px] font-mono text-gray-400 hover:text-gray-200 transition select-none"
+                className="flex items-center gap-2 text-[11px] font-mono font-medium text-gray-400 hover:text-gray-200 transition select-none bg-gray-950/50 px-2 py-1 rounded border border-gray-800 hover:border-gray-700 w-full"
                 onClick=${() => setThinkingOpen(v => !v)}
-                title="Toggle thinking"
+                title="Toggle thinking process"
               >
-                <span className=${`inline-block ${isStreaming ? 'animate-pulse text-purple-300' : 'text-purple-300'}`}>Thinking</span>
-                <span className="text-gray-600">${thinkingOpen ? '▾' : '▸'}</span>
-                ${!thinkingOpen && thinkingHint && html`<span className="truncate text-gray-500">${thinkingHint}</span>`}
+                <div className=${`w-1.5 h-1.5 rounded-full ${isStreaming ? 'bg-purple-400 animate-pulse' : 'bg-gray-600'}`}></div>
+                <span className="text-purple-300 uppercase tracking-wider text-[10px]">Reasoning</span>
+                <span className="text-gray-600 text-[10px] ml-auto">${thinkingOpen ? 'Hide' : 'Show'}</span>
               </button>
-              ${thinkingOpen && html`<pre className="mt-2 text-[12px] leading-relaxed whitespace-pre-wrap break-words font-mono text-gray-400 max-h-56 overflow-y-auto custom-scrollbar">${thinking}</pre>`}
+              ${thinkingOpen && html`
+                <div className="mt-2 pl-3 border-l-2 border-gray-800 text-gray-400 italic">
+                  <div className="text-[12px] leading-relaxed opacity-80 whitespace-pre-wrap font-serif">${thinking}</div>
+                </div>
+              `}
+              ${!thinkingOpen && html`<div className="mt-1 pl-3 text-[10px] text-gray-600 truncate opacity-50 font-serif italic">${thinkingHint}...</div>`}
             </div>
           `}
           <div className="text-sm whitespace-pre-wrap break-words">${output}</div>
@@ -158,56 +168,8 @@
     `;
   };
 
-  const StreamDock = ({ kind = 'thinking', text = '', isActive = false, onClear }) => {
-    const [open, setOpen] = useState(true);
-    useEffect(() => { if (isActive) setOpen(true); }, [isActive, kind]);
-    if (!text) return null;
-    const label = kind === 'output' ? 'Output stream' : 'Thinking stream';
-    const hint = (text || '').replace(/\s+/g, ' ').slice(-140);
-    const border = kind === 'output' ? 'border-green-500/30' : 'border-purple-500/30';
-    const titleColor = kind === 'output' ? 'text-green-300' : 'text-purple-300';
-
-    return html`
-      <div className="px-4 pb-3">
-        <div className=${`bg-gray-900 border ${border} rounded-xl overflow-hidden`}>
-          <div className="w-full flex items-center gap-3 px-3 py-2 text-[11px] font-mono text-gray-300 hover:bg-gray-800/40 transition cursor-pointer select-none" onClick=${() => setOpen(v => !v)} title="Toggle stream">
-            <span className=${`font-bold ${titleColor}`}>${label}</span>
-            <span className="text-gray-500 truncate">${open ? '' : hint}</span>
-            <div className="ml-auto flex items-center gap-2">
-              <button className="text-gray-500 hover:text-gray-200 px-2 py-1 rounded border border-gray-800 hover:border-gray-700" onClick=${(e) => { e.stopPropagation(); try { navigator.clipboard.writeText(text); } catch {} }} title="Copy">Copy</button>
-              <button className="text-gray-500 hover:text-red-300 px-2 py-1 rounded border border-gray-800 hover:border-red-500/40" onClick=${(e) => { e.stopPropagation(); onClear && onClear(); }} title="Clear">Clear</button>
-              <span className="text-gray-500">${open ? '▾' : '▸'}</span>
-            </div>
-          </div>
-          ${open && html`<div className="max-h-48 overflow-y-auto custom-scrollbar border-t border-gray-800"><pre className="p-3 text-[11px] leading-relaxed whitespace-pre-wrap break-words font-mono text-gray-400">${text}</pre></div>`}
-        </div>
-      </div>
-    `;
-  };
-
-  const LogDock = ({ logs = [], onClear }) => {
-    const [open, setOpen] = useState(false);
-    if (!logs || logs.length === 0) return null;
-    const last = logs[logs.length - 1];
-    const hint = (last && last.message ? String(last.message) : '').replace(/\s+/g, ' ').slice(-140);
-
-    return html`
-      <div className="px-4 pb-3">
-        <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
-          <div className="w-full flex items-center gap-3 px-3 py-2 text-[11px] font-mono text-gray-300 hover:bg-gray-800/40 transition cursor-pointer select-none" onClick=${() => setOpen(v => !v)} title="Toggle logs">
-            <span className="font-bold text-cyan-300">Logs</span>
-            <span className="text-gray-500 truncate">${open ? '' : hint}</span>
-            <div className="ml-auto flex items-center gap-2">
-              <button className="text-gray-500 hover:text-gray-200 px-2 py-1 rounded border border-gray-800 hover:border-gray-700" onClick=${(e) => { e.stopPropagation(); try { const blob = logs.map(l => { const ts = l.ts ? new Date(l.ts).toLocaleTimeString() : ''; const lvl = (l.level || 'info').toUpperCase(); return `[${ts}] ${lvl}: ${l.message}`; }).join('\n'); navigator.clipboard.writeText(blob); } catch {} }} title="Copy">Copy</button>
-              <button className="text-gray-500 hover:text-red-300 px-2 py-1 rounded border border-gray-800 hover:border-red-500/40" onClick=${(e) => { e.stopPropagation(); onClear && onClear(); }} title="Clear">Clear</button>
-              <span className="text-gray-500">${open ? '▾' : '▸'}</span>
-            </div>
-          </div>
-          ${open && html`<div className="max-h-56 overflow-y-auto custom-scrollbar border-t border-gray-800"><pre className="p-3 text-[11px] leading-relaxed whitespace-pre-wrap break-words font-mono text-gray-400">${logs.map(l => { const ts = l.ts ? new Date(l.ts).toLocaleTimeString() : ''; const lvl = (l.level || 'info').toUpperCase(); return `[${ts}] ${lvl}: ${l.message}`; }).join('\n')}</pre></div>`}
-        </div>
-      </div>
-    `;
-  };
+  const StreamDock = ({ kind = 'thinking', text = '', isActive = false, onClear }) => { /* Legacy, not used in main view anymore */ return null; };
+  const LogDock = ({ logs = [], onClear }) => { /* Legacy */ return null; };
 
   const LogsModal = ({ isOpen, onClose, logs = [], onClear, onCopy, sessionLogText = '', sessionLogFileName = '', onCopySessionLog, onDownloadSessionLog }) => {
     const [query, setQuery] = useState('');
@@ -221,7 +183,7 @@
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm" onClick=${onClose}>
         <div className="bg-gray-900 border border-gray-800 rounded-xl w-[820px] max-w-[95%] h-[80vh] shadow-2xl overflow-hidden flex flex-col" onClick=${(e) => e.stopPropagation()}>
           <div className="p-4 border-b border-gray-800 flex items-center justify-between">
-            <div className="flex items-center gap-2"><${Icon} name="Terminal" /><h3 className="font-bold text-white">Logs</h3><span className="text-xs text-gray-500 font-mono">${filtered.length}/${logs.length}</span></div>
+            <div className="flex items-center gap-2"><${Icon} name="Terminal" /><h3 className="font-bold text-white">System Logs</h3><span className="text-xs text-gray-500 font-mono">${filtered.length}/${logs.length}</span></div>
             <button onClick=${onClose} className="text-gray-400 hover:text-white" title="Close"><${Icon} name="Close" /></button>
           </div>
           <div className="p-4 border-b border-gray-800 flex items-center gap-2">
@@ -240,7 +202,31 @@
     `;
   };
 
-  const CodePreview = ({ files, activeFile, setActiveFile, viewMode, setViewMode, onFileChange, modifiedFiles = [], onOpenLogs, onOpenHistory }) => {
+  const ConsoleViewer = ({ logs, onClear }) => {
+     const endRef = useRef(null);
+     useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [logs]);
+
+     return html`
+        <div className="flex flex-col h-full bg-[#0d0d10] text-gray-300 font-mono text-xs">
+           <div className="flex items-center justify-between px-3 py-2 border-b border-gray-800 bg-gray-900/50">
+              <span className="font-bold text-gray-400">Console Output</span>
+              <button onClick=${onClear} className="text-gray-500 hover:text-white px-2 py-0.5 rounded hover:bg-gray-800 transition"><${Icon} name="Trash" size=${12} /></button>
+           </div>
+           <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
+              ${logs.length === 0 && html`<div className="text-gray-600 italic px-2">No output yet...</div>`}
+              ${logs.map((l, i) => html`
+                  <div key=${i} className=${`flex gap-2 border-b border-gray-800/30 pb-1 mb-1 ${l.level === 'error' ? 'text-red-400' : l.level === 'warn' ? 'text-yellow-400' : 'text-gray-300'}`}>
+                      <span className="text-gray-600 select-none">[${new Date(l.ts).toLocaleTimeString().split(' ')[0]}]</span>
+                      <span className="whitespace-pre-wrap break-all">${l.message}</span>
+                  </div>
+              `)}
+              <div ref=${endRef}></div>
+           </div>
+        </div>
+     `;
+  };
+
+  const CodePreview = ({ files, activeFile, setActiveFile, viewMode, setViewMode, onFileChange, modifiedFiles = [], onOpenLogs, onOpenHistory, previewLogs = [], onClearPreviewLogs }) => {
     const [iframeUrl, setIframeUrl] = useState(null);
     const [isPlaying, setIsPlaying] = useState(true);
     const [deviceMode, setDeviceMode] = useState('full');
@@ -248,10 +234,12 @@
     const [scaleFactor, setScaleFactor] = useState(1);
     const [copied, setCopied] = useState(false);
     const [pointMode, setPointMode] = useState(false);
+    const [showConsole, setShowConsole] = useState(false);
     const cleanupRef = useRef(null);
     const containerRef = useRef(null);
     const iframeRef = useRef(null);
     
+    // ... (FileTree Logic matches original)
     const buildFileTree = () => {
       const root = {};
       Object.keys(files || {}).forEach(path => {
@@ -336,7 +324,7 @@
       return () => observer.disconnect();
     }, [deviceMode, orientation, viewMode]);
 
-    const handleReload = () => { setIsPlaying(false); setTimeout(() => setIsPlaying(true), 50); };
+    const handleReload = () => { setIsPlaying(false); onClearPreviewLogs && onClearPreviewLogs(); setTimeout(() => setIsPlaying(true), 50); };
     const handleCopy = () => { if (files[activeFile]) { navigator.clipboard.writeText(files[activeFile]); setCopied(true); setTimeout(() => setCopied(false), 2000); } };
     const handleDownload = async () => { const zip = new JSZip(); Object.entries(files).forEach(([name, content]) => zip.file(name, content)); const blob = await zip.generateAsync({type:"blob"}); const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "vibecode_project.zip"; a.click(); };
 
@@ -364,30 +352,29 @@
                     <button onClick=${() => setDeviceMode('desktop')} className=${`p-1.5 rounded transition ${deviceMode === 'desktop' ? 'bg-gray-800 text-blue-400' : 'text-gray-500 hover:text-gray-300'}`} title="Desktop (1280px)"><${Icon} name="Monitor" size=${16} /></button>
                      <button onClick=${() => setDeviceMode('full')} className=${`p-1.5 rounded transition ${deviceMode === 'full' ? 'bg-gray-800 text-blue-400' : 'text-gray-500 hover:text-gray-300'}`} title="Full Width"><div className="w-4 h-4 border-2 border-current rounded-sm"></div></button>
                  </div>
-                 ${deviceMode !== 'full' && deviceMode !== 'desktop' && html`<button onClick=${() => setOrientation(o => o === 'portrait' ? 'landscape' : 'portrait')} className="p-2 text-gray-500 hover:text-white bg-gray-950 hover:bg-gray-800 border border-gray-800 rounded transition mr-2" title="Rotate"><${Icon} name="Rotate" size=${16} /></button>`}
-                 <div className="w-[1px] h-6 bg-gray-800 mx-2"></div>
                  <button onClick=${() => setIsPlaying(!isPlaying)} className=${`p-2 rounded transition ${isPlaying ? 'text-blue-400 hover:bg-blue-500/10' : 'text-gray-500 hover:text-gray-300'}`} title=${isPlaying ? "Pause" : "Play"}><${Icon} name=${isPlaying ? "Pause" : "Play"} size=${18} /></button>
                  <button onClick=${handleReload} className="p-2 text-gray-400 hover:text-white hover:bg-gray-800 rounded transition" title="Reload"><${Icon} name="Refresh" size=${18} /></button>
-                 <button onClick=${() => setPointMode(v => !v)} className=${`flex items-center gap-1 px-2 py-1 rounded text-[10px] uppercase tracking-wide font-semibold transition flex-shrink-0 border ${pointMode ? 'bg-purple-600/20 text-purple-200 border-purple-500/60' : 'text-gray-500 hover:text-gray-200 border-transparent hover:border-gray-700'}`} title="Point & Vibe"><${Icon} name="Target" size=${14} /></button>
+                 <button onClick=${() => setShowConsole(v => !v)} className=${`flex items-center gap-1 px-2 py-1 rounded text-[10px] uppercase tracking-wide font-semibold transition flex-shrink-0 border ${showConsole ? 'bg-gray-800 text-white border-gray-600' : 'text-gray-500 hover:text-gray-200 border-transparent hover:border-gray-700'}`} title="Toggle Console">Console ${(previewLogs || []).filter(l=>l.level==='error').length > 0 ? html`<span className="w-2 h-2 rounded-full bg-red-500"></span>` : ''}</button>
               </div>
            `}
             <div className="flex-1"></div>
            <div className="flex items-center gap-2 pl-2 flex-shrink-0">
-             <button onClick=${() => onOpenLogs && onOpenLogs()} className="p-2 text-gray-400 hover:text-white hover:bg-gray-800 rounded transition" title="Logs"><${Icon} name="Terminal" size=${16} /></button>
+             <button onClick=${() => onOpenLogs && onOpenLogs()} className="p-2 text-gray-400 hover:text-white hover:bg-gray-800 rounded transition" title="System Logs"><${Icon} name="Terminal" size=${16} /></button>
              <button onClick=${onOpenHistory} className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium bg-gray-800 hover:bg-gray-700 text-gray-300 rounded border border-gray-700 transition" title="History"><${Icon} name="Clock" size=${14} /> <span className="hidden lg:inline">History</span></button>
              <div className="w-[1px] h-6 bg-gray-800 mx-1"></div>
              <button onClick=${handleCopy} className="p-2 text-gray-400 hover:text-white hover:bg-gray-800 rounded transition" title="Copy Code"><${Icon} name="Copy" size=${16} className=${copied ? "text-green-500" : ""} /></button>
              <button onClick=${handleDownload} className="p-2 text-gray-400 hover:text-white hover:bg-gray-800 rounded transition" title="Download Zip"><${Icon} name="Download" size=${16} /></button>
            </div>
         </div>
-        <div className="flex-1 relative bg-[#0f0f12] overflow-hidden flex items-center justify-center" ref=${containerRef}>
+        <div className="flex-1 relative bg-[#0f0f12] overflow-hidden flex" ref=${containerRef}>
+           <div className="flex-1 flex items-center justify-center relative bg-gray-800/50">
            ${Object.keys(files).length === 0 ? html`
               <div className="flex flex-col items-center justify-center h-full text-gray-600">
                  <div className="w-16 h-16 rounded-full bg-gray-800 flex items-center justify-center mb-4"><${Icon} name="Code" size=${32} /></div>
                  <p>Ready to build.</p>
               </div>`
             : viewMode === 'preview' ? html`
-              <div className="relative w-full h-full flex items-center justify-center bg-gray-800/50 overflow-hidden">
+              <div className="relative w-full h-full flex items-center justify-center overflow-hidden">
                   ${pointMode && html`<div className="pointer-events-none absolute top-4 right-4 z-30 bg-purple-950/90 text-[11px] text-purple-50 px-3 py-1.5 rounded-full border border-purple-500/70 shadow-lg flex items-center gap-2"><${Icon} name="Target" size=${14} /><span>Point & Vibe aktiv</span></div>`}
                   <div style=${getContainerStyle()}>
                     ${isPlaying && iframeUrl ? html`<iframe key=${iframeUrl} ref=${iframeRef} src=${iframeUrl} className="w-full h-full border-none bg-white" sandbox="allow-scripts allow-modals allow-forms allow-same-origin allow-popups"></iframe>`
@@ -406,6 +393,12 @@
                  </div>
               </div>`
            }
+           </div>
+           ${viewMode === 'preview' && showConsole && html`
+              <div className="w-80 border-l border-gray-800 bg-[#0d0d10] flex flex-col transition-all duration-300 ease-in-out">
+                 <${ConsoleViewer} logs=${previewLogs} onClear=${onClearPreviewLogs} />
+              </div>
+           `}
         </div>
       </div>
     `;
