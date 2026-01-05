@@ -136,7 +136,8 @@
 
   const applyPatch = (originalContent, patchString) => {
     if (!originalContent) return patchString;
-    const patchRegex = /^(?:<{4,}|&lt;{4,}).*\n([\s\S]*?)\n(?:={4,}|&equals;{4,}).*\n([\s\S]*?)\n(?:>{4,}|&gt;{4,}).*/gm;
+    // Updated Regex: Allows leading whitespace/indentation for the markers (<<<<, ====, >>>>)
+    const patchRegex = /^\s*(?:<{4,}|&lt;{4,}).*\n([\s\S]*?)\n\s*(?:={4,}|&equals;{4,}).*\n([\s\S]*?)\n\s*(?:>{4,}|&gt;{4,}).*/gm;
     
     let newContent = originalContent;
     let match;
@@ -329,11 +330,12 @@
         
         const parseMarkerLine = (line) => {
           const t = (line || "").trim();
-          // Relaxed Regex: Matches "<!-- filename: foo.js -->" AND "<!-- filename: foo.js" (missing closing bracket)
-          let m = t.match(/^<!--\s*(filename|patch)\s*:\s*([^\s>]+)/i);
+          // Improved Regex: Matches "<!-- filename: foo.js -->", "<!-- filename: foo.js", "<!-- filename:foo.js-->"
+          // More robust handling of spaces around colon and closing tag
+          let m = t.match(/^<!--\s*(filename|patch)\s*:\s*([^\s>]+)(?:\s*-->|\s*$)/i);
           if (m) return { kind: m[1].toLowerCase(), name: m[2].trim() };
           
-          m = t.match(/^\/\*+\s*(filename|patch)\s*:\s*([^\s*]+)/i);
+          m = t.match(/^\/\*+\s*(filename|patch)\s*:\s*([^\s*]+)(?:\s*\*\/|\s*$)/i);
           if (m) return { kind: m[1].toLowerCase(), name: m[2].trim() };
           
           m = t.match(/^\/\/+\s*(filename|patch)\s*:\s*([^\s]+)/i);

@@ -331,36 +331,47 @@ button:active { transform: translateY(1px); }`,
 
     // --- HARDENED SYSTEM PROMPT ---
     const getSystemPrompt = (isRetry = false) => {
-        let base = `You are VibeCoder, an expert frontend engineer.
-You generate strictly valid HTML/CSS/JS.
+        let base = `You are VibeCoder, a Senior Frontend Engineer.
+You build self-contained, browser-based webapps.
 
-HIGH-LEVEL GOAL:
-Output a browser-based web app (index.html, script.js, styles.css).
-Entry point is index.html.
+CORE RULES:
+1. **No Build Steps**: Do not use npm, webpack, or require(). Use ES Modules or plain <script> tags.
+2. **Libraries**: Use CDN links (unpkg, esm.sh, cdnjs) for libraries (React, Three.js, Tailwind, etc.).
+3. **Robustness**: Verify variable scope and initialization. Avoid "undefined" errors in game loops.
+4. **File Accuracy**: Use exact filenames from the context (e.g. 'script.js' not 'js/script.js').
 
-OUTPUT INSTRUCTIONS:
-1. BE CONCISE. Do not waste tokens on long explanations.
-2. Use strict file markers for all code.
-3. You may use a <thinking> block to plan. Close it immediately before writing code.
-4. Do NOT create variant files (e.g., script2.js). Update existing files.
+CONTEXT & MEMORY:
+The current state of all project files is provided to you below. 
+You MUST read the existing code before generating new code.
+DO NOT hallucinate variables that do not exist in the provided files.
+
+THINKING & PLANNING:
+Before coding, you MUST Plan in a <thinking> block.
+- Analyze the user request.
+- Check existing variables (is 'gameLoop' global? is 'canvas' defined?).
+- Plan specific code changes to avoid breaking existing logic.
 
 OUTPUT FORMATS:
-1. <thinking>...</thinking> (Optional)
+
+1. <thinking>
+   (Plan your changes here. Check scope and logic.)
+   </thinking>
 
 2. <!-- filename: path/to/file.ext -->
-   (Full file content)
+   (Full file content - Use this for new files or major rewrites)
+   DO NOT indent the file marker. It must be at the start of the line.
 
 3. <!-- patch: path/to/file.ext -->
    <<<<
-   (Original code block - MUST match existing code exactly, whitespace matters!)
+   (Original Code Block - Must be UNIQUE and match exactly, including whitespace)
    ====
-   (New code block)
+   (New Code Block - The complete replacement)
    >>>>
 
    PATCHING RULES:
-   - Provide 3-4 lines of UNCHANGED context around your changes in the <<<< block.
-   - If a function has a logic error, rewrite the ENTIRE function in the patch. Do not try to patch single lines inside a complex function.
-   - If the patch fails, the system will warn you.
+   - Provide 3-5 lines of unchanged context *around* the change.
+   - Do NOT omit code in the "New Code Block" (no "..."). Write the full replacement logic.
+   - If a function is buggy, replace the WHOLE function, not just one line.
 `;
         if (isRetry) {
              base += `\n\nCRITICAL RETRY INSTRUCTION:
@@ -493,7 +504,7 @@ NO PYTHON. NO MARKDOWN FENCES.`;
               return `<!-- filename: ${n} -->\n${c}`;
           }).join('\n\n');
 
-      let contextString = `CURRENT FILES:\n${contextFiles}\n\nUSER REQUEST: ${userText}`;
+      let contextString = `PROJECT CONTEXT (CURRENT FILES):\n${contextFiles}\n\nUSER REQUEST: ${userText}`;
       if (runtimeError) contextString += `\n\n!!! DETECTED RUNTIME ERROR IN PREVIEW !!!\nError: ${runtimeError}\nPLEASE FIX THIS ERROR.`;
       if (pointEvents.length) contextString += `\n\nPOINT & VIBE SELECTIONS:\n` + pointEvents.map((p, idx) => `#${idx + 1}: tag=<${p.tag}> text="${(p.text||'').slice(0,50)}"`).join('\n');
 
@@ -712,6 +723,7 @@ NO PYTHON. NO MARKDOWN FENCES.`;
       <${Styles} />
       <div className="flex w-screen h-screen text-gray-200 font-sans overflow-hidden bg-gray-950">
         <div className="w-[400px] flex flex-col border-r border-gray-800 bg-gray-950 z-10 shadow-xl flex-shrink-0 relative">
+           <div className="h-1 bg-gradient-to-r from-purple-600 to-blue-600"></div>
            <div className="h-14 flex items-center justify-between px-4 border-b border-gray-800 bg-gray-950/50 backdrop-blur-sm">
               <div className="flex items-center gap-3">
                  <div className="w-5 h-5 rounded-full liquid-orb"></div>
