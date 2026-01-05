@@ -550,6 +550,17 @@
           (function() {
             window.__VC_POINT_VIBE_ENABLED__ = false;
             
+            // Polyfill for common storage check errors in virtual environments
+            window.isStorageAvailable = function(type) {
+                try {
+                    var storage = window[type];
+                    var x = '__storage_test__';
+                    storage.setItem(x, x);
+                    storage.removeItem(x);
+                    return true;
+                } catch(e) { return false; }
+            };
+
             function sendLog(type, args) {
               try {
                 if (window.parent) {

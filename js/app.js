@@ -9,7 +9,7 @@
      return;
   }
 
-  const { Styles, Icon, SettingsModal, StatusBar, ChatMessage, LogsModal, CodePreview, HistoryModal } = window.VC.Components;
+  const { Styles, Icon, SettingsModal, StatusBar, ChatMessage, LogsModal, CodePreview, HistoryModal, VibeStarters } = window.VC.Components;
   const Utils = window.VC.Utils;
 
   // --- DEFAULT TEMPLATE FOR VIRTUAL MODE ---
@@ -147,7 +147,7 @@ button:active { transform: translateY(1px); }`,
       apiUrl: 'http://localhost:1234/v1',
       model: 'local-model',
       mode: 'auto', 
-      temperature: null, // Default to null (Use Model Default)
+      temperature: null, 
     });
 
     const [setupDone, setSetupDone] = useState(false);
@@ -165,8 +165,12 @@ button:active { transform: translateY(1px); }`,
     const [showLogs, setShowLogs] = useState(false);
 
     const [logs, setLogs] = useState([]);
-    const [previewLogs, setPreviewLogs] = useState([]); // Separate logs for the Preview Console
+    const [previewLogs, setPreviewLogs] = useState([]); 
     
+    // Auto-Fix State
+    const [autoFixCount, setAutoFixCount] = useState(0);
+    const MAX_AUTO_RETRIES = 3;
+
     // Session Logging
     const [sessionLogText, setSessionLogText] = useState('');
     const [sessionLogFileName, setSessionLogFileName] = useState('');
@@ -262,6 +266,7 @@ button:active { transform: translateY(1px); }`,
     
     const abortControllerRef = useRef(null);
     const activeAssistantMsgIdRef = useRef(null);
+    const autoFixTimeoutRef = useRef(null);
     
     const filesRef = useRef(files);
     const dirHandleRef = useRef(dirHandle);
@@ -290,13 +295,32 @@ button:active { transform: translateY(1px); }`,
         setShowScrollButton(!isNearBottom);
     };
     
-    // Preview Event Handling
+    // Preview Event Handling & AUTO-FIX TRIGGER
     useEffect(() => {
         const handler = (e) => { 
             if (e.data?.type === 'iframe-error') {
-                console.error("Preview Error:", e.data.message);
-                setRuntimeError(e.data.message); 
-                appendSessionLog('preview.iframe_error', { message: e.data.message }).catch(() => {});
+                const errMsg = e.data.message;
+                console.error("Preview Error:", errMsg);
+                setRuntimeError(errMsg); 
+                appendSessionLog('preview.iframe_error', { message: errMsg }).catch(() => {});
+
+                // AUTO-FIX LOGIC
+                // Only trigger if idle, not already fixing too much, and it's a real error
+                if (autoFixTimeoutRef.current) clearTimeout(autoFixTimeoutRef.current);
+                autoFixTimeoutRef.current = setTimeout(() => {
+                    setAppStatus(prevStatus => {
+                        if (prevStatus === 'idle' && autoFixCount < MAX_AUTO_RETRIES) {
+                             log('info', `Auto-fixing runtime error (Attempt ${autoFixCount + 1}/${MAX_AUTO_RETRIES})`);
+                             setAutoFixCount(c => c + 1);
+                             // Trigger the fix
+                             handleSend(`I detected a runtime error in the preview:\n"${errMsg}"\n\nPlease analyze the code and apply a fix. Do not rewrite the entire application if a small patch works.`);
+                        } else if (autoFixCount >= MAX_AUTO_RETRIES) {
+                             log('warn', 'Max auto-fix retries reached. Stopping.');
+                             setStatusMsg('Automatic fixes paused. Please check manually.');
+                        }
+                        return prevStatus;
+                    });
+                }, 1000); // Small debounce to let things settle
             }
             if (e.data?.type === 'iframe-point') {
                 setPointEvents(prev => {
@@ -312,7 +336,7 @@ button:active { transform: translateY(1px); }`,
         };
         window.addEventListener('message', handler);
         return () => window.removeEventListener('message', handler);
-    }, [appendSessionLog]);
+    }, [appendSessionLog, autoFixCount]); // depend on autoFixCount to know when to stop
 
     // Auto-Save
     const saveTimerRef = useRef(null);
@@ -444,11 +468,18 @@ NO PYTHON. NO MARKDOWN FENCES.`;
         return false;
     };
 
-    const handleSend = async () => {
+    const handleSend = async (overrideInput) => {
       if (appStatus !== 'idle') { handleStop(); return; }
-      if ((!input.trim() && !attachments.length)) return;
+      
+      const txt = overrideInput || input;
+      // If manually sending, reset auto-fix count
+      if (!overrideInput) {
+          setAutoFixCount(0);
+      }
+      
+      if ((!txt.trim() && !attachments.length)) return;
 
-      const userText = input;
+      const userText = txt;
       const userMsgId = makeId();
       const assistantMsgId = makeId();
       activeAssistantMsgIdRef.current = assistantMsgId;
@@ -458,7 +489,7 @@ NO PYTHON. NO MARKDOWN FENCES.`;
       } catch {}
 
       if (Object.keys(files).length > 0) {
-         setHistory(prev => [...prev, { timestamp: Date.now(), files: JSON.parse(JSON.stringify(files)), prompt: input || "Upload" }]);
+         setHistory(prev => [...prev, { timestamp: Date.now(), files: JSON.parse(JSON.stringify(files)), prompt: txt || "Upload" }]);
          setCurrentVersionIndex(history.length);
       }
 
@@ -477,13 +508,17 @@ NO PYTHON. NO MARKDOWN FENCES.`;
       let promptSuffix = assetNotices.length > 0 ? `\n\nAVAILABLE ASSETS:\n${assetNotices.map(p => `- ${p}`).join('\n')}` : "";
 
       if (attachments.length > 0) {
-          userContent = [{ type: "text", text: (input || "Analyze images.") + promptSuffix }];
+          userContent = [{ type: "text", text: (txt || "Analyze images.") + promptSuffix }];
           attachments.forEach(att => userContent.push({ type: "image_url", image_url: { url: att.data } }));
       } else {
-          userContent = (input || '') + promptSuffix;
+          userContent = (txt || '') + promptSuffix;
       }
 
-      const displayUserText = (input || '[Images Uploaded]') + (assetNotices.length ? `\n[+ Added ${assetNotices.length} assets]` : '');
+      const displayUserText = (txt || '[Images Uploaded]') + (assetNotices.length ? `\n[+ Added ${assetNotices.length} assets]` : '');
+      
+      // Don't show "I detected a runtime error..." as a User bubble if it's auto-fix, 
+      // or do show it so they know what's happening? 
+      // User vibe: Transparency is good. "System detected error" is fine.
       
       setMessages(prev => ([
         ...prev,
@@ -512,7 +547,7 @@ NO PYTHON. NO MARKDOWN FENCES.`;
           }).join('\n\n');
 
       let contextString = `PROJECT CONTEXT (CURRENT FILES):\n${contextFiles}\n\nUSER REQUEST: ${userText}`;
-      if (runtimeError) contextString += `\n\n!!! DETECTED RUNTIME ERROR IN PREVIEW !!!\nError: ${runtimeError}\nPLEASE FIX THIS ERROR.`;
+      if (runtimeError && !overrideInput) contextString += `\n\n!!! DETECTED RUNTIME ERROR IN PREVIEW !!!\nError: ${runtimeError}\nPLEASE FIX THIS ERROR.`;
       if (pointEvents.length) contextString += `\n\nPOINT & VIBE SELECTIONS:\n` + pointEvents.map((p, idx) => `#${idx + 1}: tag=<${p.tag}> text="${(p.text||'').slice(0,50)}"`).join('\n');
 
       await appendSessionLog('request.context_files', contextFilesList);
@@ -740,6 +775,12 @@ NO PYTHON. NO MARKDOWN FENCES.`;
            </div>
            <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar" ref=${chatContainerRef} onScroll=${handleChatScroll}>
               ${messages.map(m => html`<${ChatMessage} key=${m.id} msg=${m} />`)}
+              ${messages.length === 1 && html`
+                  <div className="flex flex-col items-center justify-center py-6">
+                      <p className="text-gray-500 text-sm mb-2">No idea? Try a vibe starter:</p>
+                      <${VibeStarters} onSelect=${(prompt) => handleSend(prompt)} />
+                  </div>
+              `}
               <div ref=${msgsEndRef}></div>
            </div>
            ${showScrollButton && html`<button onClick=${() => msgsEndRef.current?.scrollIntoView({ behavior: 'smooth' })} className="absolute bottom-[220px] right-6 p-2 bg-gray-800 border border-gray-700 text-white rounded-full shadow-lg shadow-black/50 hover:bg-gray-700 transition z-20"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg></button>`}
@@ -752,7 +793,7 @@ NO PYTHON. NO MARKDOWN FENCES.`;
                     <input type="file" id="file-upload" multiple accept="image/*" className="hidden" onChange=${handleFileSelect} />
                     <label for="file-upload" className="p-2 text-gray-500 hover:text-blue-400 cursor-pointer transition" title="Attach Image"><${Icon} name="Image" /></label>
                     <textarea value=${input} onInput=${e => setInput(e.target.value)} onKeyDown=${e => e.key === 'Enter' && !e.shiftKey && (e.preventDefault(), handleSend())} className="flex-1 bg-transparent text-sm outline-none resize-none text-gray-200 max-h-32 py-2" rows=${1} style=${{minHeight: '24px'}} placeholder="Ask to change something..." />
-                    <button onClick=${handleSend} disabled=${(!input.trim() && !attachments.length) && appStatus === 'idle'} className=${`p-2 rounded-lg shadow-lg transition flex-shrink-0 ${appStatus !== 'idle' ? 'bg-red-600 hover:bg-red-500 text-white shadow-red-900/20' : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-600/20 disabled:opacity-50 disabled:cursor-not-allowed'}`}><${Icon} name=${appStatus !== 'idle' ? 'Stop' : 'Send'} /></button>
+                    <button onClick=${() => handleSend()} disabled=${(!input.trim() && !attachments.length) && appStatus === 'idle'} className=${`p-2 rounded-lg shadow-lg transition flex-shrink-0 ${appStatus !== 'idle' ? 'bg-red-600 hover:bg-red-500 text-white shadow-red-900/20' : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-600/20 disabled:opacity-50 disabled:cursor-not-allowed'}`}><${Icon} name=${appStatus !== 'idle' ? 'Stop' : 'Send'} /></button>
                  </div>
               </div>
            </div>

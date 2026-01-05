@@ -29,6 +29,16 @@
             color: white;
             background: rgba(168, 85, 247, 0.05);
           }
+          .vibe-chip {
+            transition: all 0.2s;
+            border: 1px solid rgba(168, 85, 247, 0.2);
+          }
+          .vibe-chip:hover {
+            transform: translateY(-2px);
+            border-color: rgba(168, 85, 247, 0.6);
+            background: rgba(168, 85, 247, 0.1);
+            box-shadow: 0 4px 12px rgba(168, 85, 247, 0.15);
+          }
           input[type=range] {
             -webkit-appearance: none; 
             background: transparent; 
@@ -83,9 +93,33 @@
       Tablet: '<rect x="4" y="2" width="16" height="20" rx="2" ry="2"></rect><line x1="12" y1="18" x2="12.01" y2="18"></line>',
       Monitor: '<rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line>',
       Rotate: '<path d="M23 4v6h-6"></path><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>',
-      Terminal: '<polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line>'
+      Terminal: '<polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line>',
+      Wand: '<path d="M14.5 2c1.5 0 4 1.5 4 4.5s-2.5 4.5-4 4.5c-1.5 0-4-1.5-4-4.5s2.5-4.5 4-4.5z"></path><path d="M14.5 11c0 2 1.5 3 4.5 3s4.5-1 4.5-3"></path><line x1="8" y1="13" x2="2" y2="19"></line><line x1="2" y1="13" x2="8" y2="19"></line>'
     };
     return html`<svg width=${size} height=${size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className=${className} dangerouslySetInnerHTML=${{__html: paths[name] || ''}}></svg>`;
+  };
+
+  const VibeStarters = ({ onSelect }) => {
+    const templates = [
+      { emoji: "🕹️", label: "Retro Snake Game", prompt: "Build a neon-style retro snake game with score tracking and particle effects." },
+      { emoji: "🎨", label: "Portfolio Site", prompt: "Create a modern, minimal portfolio website with a dark theme and smooth scroll animations." },
+      { emoji: "🍅", label: "Pomodoro Timer", prompt: "Code a beautiful Pomodoro timer with ambient background sounds and a circular progress indicator." },
+      { emoji: "🎹", label: "Synth Keyboard", prompt: "Make a browser-based synthesizer keyboard that I can play with my mouse or keys." },
+      { emoji: "📊", label: "Dashboard", prompt: "Design a futuristic data dashboard with charts and glassmorphism effects." }
+    ];
+
+    return html`
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-6 max-w-lg w-full">
+        ${templates.map(t => html`
+          <button onClick=${() => onSelect(t.prompt)} className="vibe-chip bg-gray-900/50 p-4 rounded-xl text-left flex items-center gap-4 group">
+             <span className="text-2xl group-hover:scale-110 transition duration-300 filter grayscale group-hover:grayscale-0">${t.emoji}</span>
+             <div>
+                <div className="text-sm font-semibold text-gray-200 group-hover:text-purple-300 transition">${t.label}</div>
+             </div>
+          </button>
+        `)}
+      </div>
+    `;
   };
 
   const StatusBar = ({ status, message }) => {
@@ -120,12 +154,7 @@
     const thinking = (m.thinking || '').toString();
     const output = (m.output != null ? m.output : (m.content || '')).toString();
     const isStreaming = !!m.isStreaming;
-    const [thinkingOpen, setThinkingOpen] = useState(isStreaming && thinking.length > 0);
-
-    // Auto-open thinking when it starts streaming
-    useEffect(() => {
-        if (isStreaming && thinking.length > 0 && thinking.length < 50) setThinkingOpen(true);
-    }, [isStreaming, thinking]);
+    const [thinkingOpen, setThinkingOpen] = useState(false); // Default to CLOSED for vibecoders
 
     if (isUser) {
       return html`
@@ -159,7 +188,6 @@
                   <div className="text-[12px] leading-relaxed opacity-80 whitespace-pre-wrap font-serif">${thinking}</div>
                 </div>
               `}
-              ${!thinkingOpen && html`<div className="mt-1 pl-3 text-[10px] text-gray-600 truncate opacity-50 font-serif italic">${thinkingHint}...</div>`}
             </div>
           `}
           <div className="text-sm whitespace-pre-wrap break-words">${output}</div>
@@ -239,7 +267,9 @@
     const containerRef = useRef(null);
     const iframeRef = useRef(null);
     
-    // ... (FileTree Logic matches original)
+    // Check for errors to decide whether to show the console toggle
+    const errorCount = (previewLogs || []).filter(l => l.level === 'error').length;
+    
     const buildFileTree = () => {
       const root = {};
       Object.keys(files || {}).forEach(path => {
@@ -354,7 +384,9 @@
                  </div>
                  <button onClick=${() => setIsPlaying(!isPlaying)} className=${`p-2 rounded transition ${isPlaying ? 'text-blue-400 hover:bg-blue-500/10' : 'text-gray-500 hover:text-gray-300'}`} title=${isPlaying ? "Pause" : "Play"}><${Icon} name=${isPlaying ? "Pause" : "Play"} size=${18} /></button>
                  <button onClick=${handleReload} className="p-2 text-gray-400 hover:text-white hover:bg-gray-800 rounded transition" title="Reload"><${Icon} name="Refresh" size=${18} /></button>
-                 <button onClick=${() => setShowConsole(v => !v)} className=${`flex items-center gap-1 px-2 py-1 rounded text-[10px] uppercase tracking-wide font-semibold transition flex-shrink-0 border ${showConsole ? 'bg-gray-800 text-white border-gray-600' : 'text-gray-500 hover:text-gray-200 border-transparent hover:border-gray-700'}`} title="Toggle Console">Console ${(previewLogs || []).filter(l=>l.level==='error').length > 0 ? html`<span className="w-2 h-2 rounded-full bg-red-500"></span>` : ''}</button>
+                 <button onClick=${() => setShowConsole(v => !v)} className=${`flex items-center gap-1 px-2 py-1 rounded text-[10px] uppercase tracking-wide font-semibold transition flex-shrink-0 border ${showConsole ? 'bg-gray-800 text-white border-gray-600' : 'text-gray-500 hover:text-gray-200 border-transparent hover:border-gray-700'}`} title="Show Console">
+                      ${errorCount > 0 ? html`<span className="text-red-400 flex items-center gap-1 animate-pulse"><${Icon} name="Alert" size=${12} /> ${errorCount}</span>` : "Console"}
+                 </button>
               </div>
            `}
             <div className="flex-1"></div>
@@ -474,5 +506,5 @@
   };
 
   window.VC = window.VC || {};
-  window.VC.Components = { Styles, Icon, SettingsModal, StatusBar, ChatMessage, StreamDock, LogDock, LogsModal, CodePreview, HistoryModal };
+  window.VC.Components = { Styles, Icon, SettingsModal, StatusBar, ChatMessage, StreamDock, LogDock, LogsModal, CodePreview, HistoryModal, VibeStarters };
 })();
