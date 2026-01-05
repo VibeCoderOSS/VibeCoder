@@ -136,7 +136,6 @@
 
   const applyPatch = (originalContent, patchString) => {
     if (!originalContent) return patchString;
-    // Updated Regex: Allows leading whitespace/indentation for the markers (<<<<, ====, >>>>)
     const patchRegex = /^\s*(?:<{4,}|&lt;{4,}).*\n([\s\S]*?)\n\s*(?:={4,}|&equals;{4,}).*\n([\s\S]*?)\n\s*(?:>{4,}|&gt;{4,}).*/gm;
     
     let newContent = originalContent;
@@ -151,7 +150,7 @@
         continue;
       }
 
-      // 2. Trimmed match (ignores leading/trailing whitespace of the block)
+      // 2. Trimmed match
       const trimmedOld = oldCode.trim();
       const trimmedNew = replacementCode.trim();
       if (newContent.includes(trimmedOld)) {
@@ -159,7 +158,7 @@
         continue;
       }
 
-      // 3. Fuzzy match (ignores indentation and blank lines)
+      // 3. Fuzzy match
       const fuzzyLoc = findFuzzyLocation(newContent, oldCode);
       if (fuzzyLoc) {
         const before = newContent.slice(0, fuzzyLoc.startIndex);
@@ -192,18 +191,18 @@
   const splitThinking = (raw) => {
     if (!raw) return { thinking: '', output: raw, thinkingOpen: false };
     
-    // Support standard tags and some variations
-    const openMatch = raw.match(/<(?:thinking|think)(?:[\s>])/i);
+    // Robust regex to handle <think>, <thinking>, and variations
+    const openMatch = raw.match(/<(?:thinking|think)>/i);
     
     if (!openMatch || typeof openMatch.index !== 'number') {
       return { thinking: '', output: raw, thinkingOpen: false };
     }
 
-    const fullTag = openMatch[0].trim();
-    const tagName = fullTag.startsWith('<think') ? (fullTag.startsWith('<thinking') ? 'thinking' : 'think') : 'thinking';
+    const fullTag = openMatch[0];
+    const tagName = fullTag.replace(/[<>]/g, ''); // 'think' or 'thinking'
     
     const openStart = openMatch.index;
-    const realOpenEnd = raw.indexOf('>', openStart) + 1;
+    const realOpenEnd = openStart + fullTag.length;
     const afterOpen = raw.slice(realOpenEnd);
 
     // 1. Try explicit closing tag
@@ -219,7 +218,6 @@
     }
 
     // 2. Try implicit exit via Code Fences (```)
-    // Small models often start code without closing thinking
     const fenceMatch = afterOpen.match(/(?:^|\n)\s*```/);
     if (fenceMatch && typeof fenceMatch.index === 'number') {
         const fenceStart = realOpenEnd + fenceMatch.index;
@@ -248,12 +246,9 @@
            (parsed.patches && Object.keys(parsed.patches).length > 0);
   };
 
-  // Helper to remove ```language and ``` from a string, aggressively
   const stripInnerFences = (content) => {
       let c = (content || "").trim();
-      // Remove starting fence if present (ignoring language name)
       c = c.replace(/^```[^\n]*\n/, "");
-      // Remove ending fence if present
       c = c.replace(/\n```\s*$/, "");
       return c;
   };
@@ -326,12 +321,8 @@
             text = split.output;
         }
 
-        const stripCodeFence = (content) => (content || "").replace(/^\s*```[a-zA-Z0-9_-]*\s*\n?/, "").replace(/\n?```\s*$/, "");
-        
         const parseMarkerLine = (line) => {
           const t = (line || "").trim();
-          // Improved Regex: Matches "<!-- filename: foo.js -->", "<!-- filename: foo.js", "<!-- filename:foo.js-->"
-          // More robust handling of spaces around colon and closing tag
           let m = t.match(/^<!--\s*(filename|patch)\s*:\s*([^\s>]+)(?:\s*-->|\s*$)/i);
           if (m) return { kind: m[1].toLowerCase(), name: m[2].trim() };
           
@@ -350,7 +341,6 @@
           return null;
         };
 
-        // Aggressively remove outer code fences for the whole block if present
         const textNoFences = text.replace(/^```[\s\S]*?\n/, "").replace(/\n```\s*$/, "");
 
         // PASS B: Strict Markers
@@ -360,11 +350,8 @@
           let buf = [];
           const commit = () => {
             if (!current) return;
-            // Clean up buffer: remove explicit fences if the model wrapped the content INSIDE the marker
             let content = buf.join("\n").trim();
             content = stripInnerFences(content);
-            
-            // Remove the marker line itself if it got stuck in the buffer (rare)
             content = content.replace(/^(?:<!--|\/\*+|\/\/+)\s*(?:filename|patch)\s*:\s*[^\n]+\n?/i, "");
             
             if (current.kind === "filename") result.files[current.name] = content;
@@ -372,7 +359,6 @@
           };
 
           for (const line of lines) {
-            // Check for marker
             const marker = parseMarkerLine(line);
             if (marker) {
               if (current) commit();
@@ -387,7 +373,7 @@
 
         if (Object.keys(result.files).length > 0 || Object.keys(result.patches).length > 0) return result;
 
-        // PASS C: Loose Labels (Fallback)
+        // PASS C: Loose Labels
         {
           const lines = textNoFences.split("\n");
           let current = null;
@@ -441,9 +427,7 @@
         const warnings = [];
         const out = { ...parsed, files: { ...(parsed.files || {}) }, patches: { ...(parsed.patches || {}) } };
         const safeTrimEnd = (s) => String(s ?? "").replace(/\r\n/g, "\n").replace(/\s+$/g, "");
-        const escapeRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
         
-        // Final sanity clean check
         const sanitizeFileContent = (filename, content) => {
           let c = stripInnerFences(content);
           return safeTrimEnd(c);
@@ -560,17 +544,36 @@
 
       html = html.replace(/<script\b[^>]*src=["'][^"']+\.(ts|tsx)["'][^>]*><\/script>/gi, '');
 
+      // INJECTED SCRIPT FOR ERROR & CONSOLE LOG CAPTURE
       const errorScript = `
         <script>
           (function() {
             window.__VC_POINT_VIBE_ENABLED__ = false;
+            
+            function sendLog(type, args) {
+              try {
+                if (window.parent) {
+                   window.parent.postMessage({ 
+                      type: 'iframe-log', 
+                      level: type,
+                      message: Array.from(args).map(a => {
+                        try { return typeof a === 'object' ? JSON.stringify(a) : String(a); } catch(e) { return String(a); }
+                      }).join(' ')
+                   }, '*');
+                }
+              } catch(e) {}
+            }
+
             var originalLog = console.log;
+            var originalWarn = console.warn;
             var originalError = console.error;
-            console.error = function() {
-                var args = Array.from(arguments);
-                originalError.apply(console, args);
-                try { if (window.parent) window.parent.postMessage({ type: 'iframe-error', message: args.map(String).join(' '), source: 'console' }, '*'); } catch(e) {}
-            };
+            var originalInfo = console.info;
+
+            console.log = function() { originalLog.apply(console, arguments); sendLog('log', arguments); };
+            console.warn = function() { originalWarn.apply(console, arguments); sendLog('warn', arguments); };
+            console.error = function() { originalError.apply(console, arguments); sendLog('error', arguments); };
+            console.info = function() { originalInfo.apply(console, arguments); sendLog('info', arguments); };
+
             window.addEventListener('message', function(event) { try { if (event.data.type === 'toggle-point-vibe') window.__VC_POINT_VIBE_ENABLED__ = !!event.data.enabled; } catch (e) {} });
             window.addEventListener('click', function(ev) {
               try {
@@ -583,7 +586,9 @@
                 if (window.parent) window.parent.postMessage(payload, '*');
               } catch (e) {}
             }, true);
-            window.onerror = function(message, source, lineno, colno, error) { try { if (window.parent) window.parent.postMessage({ type: 'iframe-error', message: message, source: source, line: lineno, column: colno }, '*'); } catch (e) {} };
+            window.onerror = function(message, source, lineno, colno, error) { 
+                sendLog('error', [message, 'at', source, ':', lineno]);
+            };
           })();
         </script>
       `;

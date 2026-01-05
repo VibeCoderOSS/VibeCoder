@@ -78,8 +78,10 @@ button:active { transform: translateY(1px); }`,
     'script.js': `document.getElementById('btn').addEventListener('click', () => {
   const btn = document.getElementById('btn');
   btn.textContent = 'Vibe Checked ✅';
+  console.log('Vibe check initiated...');
   if (typeof confetti !== 'undefined') {
     confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
+    console.log('Confetti triggered!');
   } else {
     alert('Vibe Checked! ✅');
   }
@@ -163,6 +165,7 @@ button:active { transform: translateY(1px); }`,
     const [showLogs, setShowLogs] = useState(false);
 
     const [logs, setLogs] = useState([]);
+    const [previewLogs, setPreviewLogs] = useState([]); // Separate logs for the Preview Console
     
     // Session Logging
     const [sessionLogText, setSessionLogText] = useState('');
@@ -287,7 +290,7 @@ button:active { transform: translateY(1px); }`,
         setShowScrollButton(!isNearBottom);
     };
     
-    // Preview Error Handling
+    // Preview Event Handling
     useEffect(() => {
         const handler = (e) => { 
             if (e.data?.type === 'iframe-error') {
@@ -301,6 +304,10 @@ button:active { transform: translateY(1px); }`,
                     return next.slice(-6);
                 });
                 appendSessionLog('preview.point', e.data).catch(() => {});
+            }
+            if (e.data?.type === 'iframe-log') {
+                const entry = { ts: Date.now(), level: e.data.level, message: e.data.message };
+                setPreviewLogs(prev => [...prev.slice(-100), entry]);
             }
         };
         window.addEventListener('message', handler);
@@ -752,7 +759,7 @@ NO PYTHON. NO MARKDOWN FENCES.`;
         </div>
         <div className="flex-1 flex flex-col overflow-hidden relative border-l border-gray-800">
            <div className="h-1 bg-gradient-to-r from-purple-600/50 to-blue-600/50 absolute top-0 left-0 right-0 z-10"></div>
-           <${CodePreview} files=${files} activeFile=${activeFile} setActiveFile=${setActiveFile} viewMode=${viewMode} setViewMode=${setViewMode} onFileChange=${(f, c) => setFiles({...files, [f]: c})} modifiedFiles=${modifiedFiles} onOpenHistory=${() => setShowHistory(true)} onOpenLogs=${() => setShowLogs(true)} />
+           <${CodePreview} files=${files} activeFile=${activeFile} setActiveFile=${setActiveFile} viewMode=${viewMode} setViewMode=${setViewMode} onFileChange=${(f, c) => setFiles({...files, [f]: c})} modifiedFiles=${modifiedFiles} onOpenHistory=${() => setShowHistory(true)} onOpenLogs=${() => setShowLogs(true)} previewLogs=${previewLogs} onClearPreviewLogs=${() => setPreviewLogs([])} />
         </div>
         <${SettingsModal} isOpen=${showSettings} onClose=${() => setShowSettings(false)} settings=${settings} onSave=${s => setSettings(s)} systemPromptPreview=${getSystemPrompt()} />
         <${HistoryModal} isOpen=${showHistory} onClose=${() => setShowHistory(false)} history=${history} currentVersionIndex=${currentVersionIndex} onRestore=${handleRestoreHistory} />
