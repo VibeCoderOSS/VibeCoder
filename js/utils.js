@@ -1,9 +1,7 @@
 (function() {
   
-  // Helper: Normalize strings
   const normalize = (str) => str.replace(/\r\n/g, '\n').trim();
 
-  // Helper: Debounce
   const debounce = (func, wait) => {
     let timeout;
     return function(...args) {
@@ -13,7 +11,6 @@
     };
   };
 
-  // Helper: Read File as Data URL
   const readAsDataURL = (file) => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -23,13 +20,13 @@
     });
   };
 
-  // Helper: Path Resolution
   const resolvePath = (baseFile, relativePath) => {
+      if (!relativePath) return relativePath;
       if (relativePath.startsWith('/')) return relativePath.slice(1);
       if (relativePath.startsWith('http') || relativePath.startsWith('data:')) return relativePath;
 
       const baseParts = baseFile.split('/');
-      baseParts.pop(); // remove file
+      baseParts.pop(); 
 
       const relParts = relativePath.split('/');
       for (const part of relParts) {
@@ -39,243 +36,471 @@
       return baseParts.join('/');
   };
 
-  // Helper: Patchengine fuer "patch:" Bloecke
+  const normalizeRootUrl = (baseUrl) => {
+    return (baseUrl || '')
+      .toString()
+      .trim()
+      .replace(/\/chat\/completions$/, '')
+      .replace(/\/responses$/, '')
+      .replace(/\/completions$/, '')
+      .replace(/\/models$/, '')
+      .replace(/\/v1$/, '')
+      .replace(/\/api\/v0$/, '')
+      .replace(/\/+$/, '');
+  };
+
+  const isDataUrlImage = (s) => typeof s === 'string' && s.startsWith('data:image');
+
+  const sanitizeForLog = (name, content) => {
+    try {
+      if (isDataUrlImage(content)) {
+        const len = content.length;
+        const head = content.slice(0, 64);
+        const tail = content.slice(-32);
+        return `[Binary image data url: ${name} | length=${len} | head="${head}..." | tail="...${tail}"]`;
+      }
+      if (typeof content !== 'string') {
+        return JSON.stringify(content, null, 2);
+      }
+      if (content.length > 250_000) {
+        const head = content.slice(0, 120_000);
+        const tail = content.slice(-40_000);
+        return `${head}\n\n[...TRUNCATED ${content.length - head.length - tail.length} chars...]\n\n${tail}`;
+      }
+      return content;
+    } catch {
+      return String(content);
+    }
+  };
+
+  const appendToFileHandle = async (fileHandle, text) => {
+    if (!fileHandle) return;
+    const file = await fileHandle.getFile();
+    const writable = await fileHandle.createWritable({ keepExistingData: true });
+    await writable.write({ type: 'write', position: file.size, data: text });
+    await writable.close();
+  };
+
+  const ensureLogFile = async (dirHandle) => {
+    if (!dirHandle) return null;
+    const logDir = await dirHandle.getDirectoryHandle('.vibecode', { create: true });
+    return await logDir.getFileHandle('session.log.txt', { create: true });
+  };
+
+  const downloadText = (filename, text) => {
+    const blob = new Blob([text || ''], { type: 'text/plain' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename || 'vibecode_log.txt';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  };
+
+  // --- FUZZY PATCHING LOGIC ---
+  const findFuzzyLocation = (fileContent, searchBlock) => {
+    if (!fileContent || !searchBlock) return null;
+    const fileLines = fileContent.split('\n');
+    const searchLines = searchBlock.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+    
+    if (searchLines.length === 0) return null;
+
+    const normalizedFile = fileLines.map((line, idx) => ({ 
+        text: line.trim(), 
+        idx 
+    })).filter(l => l.text.length > 0);
+
+    for (let i = 0; i <= normalizedFile.length - searchLines.length; i++) {
+        let match = true;
+        for (let j = 0; j < searchLines.length; j++) {
+            if (normalizedFile[i + j].text !== searchLines[j]) {
+                match = false;
+                break;
+            }
+        }
+
+        if (match) {
+            const startLineIdx = normalizedFile[i].idx;
+            const endLineIdx = normalizedFile[i + searchLines.length - 1].idx;
+            
+            let startIndex = 0;
+            for (let k = 0; k < startLineIdx; k++) startIndex += fileLines[k].length + 1;
+
+            let endIndex = 0;
+            for (let k = 0; k <= endLineIdx; k++) endIndex += fileLines[k].length + 1;
+            
+            return { startIndex, endIndex: endIndex - 1 };
+        }
+    }
+    return null;
+  };
+
   const applyPatch = (originalContent, patchString) => {
     if (!originalContent) return patchString;
-
-    const patchRegex = /<<<<\s*([\s\S]*?)\s*====\s*([\s\S]*?)\s*>>>>/g;
+    const patchRegex = /^(?:<{4,}|&lt;{4,}).*\n([\s\S]*?)\n(?:={4,}|&equals;{4,}).*\n([\s\S]*?)\n(?:>{4,}|&gt;{4,}).*/gm;
+    
     let newContent = originalContent;
     let match;
-
+    
     while ((match = patchRegex.exec(patchString)) !== null) {
-      const [full, oldCode, newCode] = match;
-
-      // 1. exakter Treffer
+      const [full, oldCode, replacementCode] = match;
+      
+      // 1. Exact match
       if (newContent.includes(oldCode)) {
-        newContent = newContent.replace(oldCode, newCode);
+        newContent = newContent.replace(oldCode, replacementCode);
         continue;
       }
 
-      // 2. getrimmter Block
+      // 2. Trimmed match (ignores leading/trailing whitespace of the block)
       const trimmedOld = oldCode.trim();
-      const trimmedNew = newCode.trim();
-
-      const idx = newContent.indexOf(trimmedOld);
-      if (idx !== -1) {
+      const trimmedNew = replacementCode.trim();
+      if (newContent.includes(trimmedOld)) {
         newContent = newContent.replace(trimmedOld, trimmedNew);
-      } else {
-        console.warn('Patch failed for block:', trimmedOld.slice(0, 80) + '...');
+        continue;
       }
+
+      // 3. Fuzzy match (ignores indentation and blank lines)
+      const fuzzyLoc = findFuzzyLocation(newContent, oldCode);
+      if (fuzzyLoc) {
+        const before = newContent.slice(0, fuzzyLoc.startIndex);
+        const after = newContent.slice(fuzzyLoc.endIndex);
+        newContent = before + replacementCode + after;
+        continue;
+      }
+
+      console.warn('Patch failed for block:', trimmedOld.slice(0, 50) + '...');
+    }
+    return newContent;
+  };
+
+  const detectPython = (text) => {
+      if (!text || typeof text !== 'string') return false;
+      const lower = text.toLowerCase();
+      if (lower.includes('def main():')) return true;
+      if (lower.includes('if __name__ == "__main__":')) return true;
+      if (lower.includes('import pygame')) return true;
+      if (lower.includes('pip install')) return true;
+      
+      const hasPythonWord = lower.includes('python');
+      const hasImport = lower.includes('import ');
+      const hasDef = lower.includes('def ');
+      
+      if (hasPythonWord && (hasImport || hasDef)) return true;
+      return false;
+  };
+
+  const splitThinking = (raw) => {
+    if (!raw) return { thinking: '', output: raw, thinkingOpen: false };
+    
+    // Support standard tags and some variations
+    const openMatch = raw.match(/<(?:thinking|think)(?:[\s>])/i);
+    
+    if (!openMatch || typeof openMatch.index !== 'number') {
+      return { thinking: '', output: raw, thinkingOpen: false };
     }
 
-    return newContent;
+    const fullTag = openMatch[0].trim();
+    const tagName = fullTag.startsWith('<think') ? (fullTag.startsWith('<thinking') ? 'thinking' : 'think') : 'thinking';
+    
+    const openStart = openMatch.index;
+    const realOpenEnd = raw.indexOf('>', openStart) + 1;
+    const afterOpen = raw.slice(realOpenEnd);
+
+    // 1. Try explicit closing tag
+    const closeRegex = new RegExp(`<\/${tagName}>`, 'i');
+    const closeMatch = afterOpen.match(closeRegex);
+
+    if (closeMatch && typeof closeMatch.index === 'number') {
+        const closeStart = realOpenEnd + closeMatch.index;
+        const closeEnd = closeStart + closeMatch[0].length;
+        const thinking = raw.slice(realOpenEnd, closeStart);
+        const output = (raw.slice(0, openStart) + raw.slice(closeEnd)).trimStart();
+        return { thinking, output, thinkingOpen: false };
+    }
+
+    // 2. Try implicit exit via Code Fences (```)
+    // Small models often start code without closing thinking
+    const fenceMatch = afterOpen.match(/(?:^|\n)\s*```/);
+    if (fenceMatch && typeof fenceMatch.index === 'number') {
+        const fenceStart = realOpenEnd + fenceMatch.index;
+        const thinking = raw.slice(realOpenEnd, fenceStart);
+        const output = (raw.slice(0, openStart) + raw.slice(fenceStart)).trimStart();
+        return { thinking, output, thinkingOpen: false };
+    }
+
+    // 3. Try implicit exit via File Markers
+    const implicitExit = afterOpen.match(/(?:^|\n)(?:<!--|\/\*+|\/\/+)\s*(?:filename|patch):/i);
+    if (implicitExit && typeof implicitExit.index === 'number') {
+         const implicitEndIndex = realOpenEnd + implicitExit.index;
+         const thinking = raw.slice(realOpenEnd, implicitEndIndex);
+         const output = (raw.slice(0, openStart) + raw.slice(implicitEndIndex)).trimStart();
+         return { thinking, output, thinkingOpen: false };
+    }
+
+    const thinking = afterOpen;
+    const prefix = raw.slice(0, openStart);
+    return { thinking, output: prefix, thinkingOpen: true };
+  };
+
+  const hasEdits = (parsed) => {
+    if (!parsed) return false;
+    return (parsed.files && Object.keys(parsed.files).length > 0) ||
+           (parsed.patches && Object.keys(parsed.patches).length > 0);
+  };
+
+  // Helper to remove ```language and ``` from a string, aggressively
+  const stripInnerFences = (content) => {
+      let c = (content || "").trim();
+      // Remove starting fence if present (ignoring language name)
+      c = c.replace(/^```[^\n]*\n/, "");
+      // Remove ending fence if present
+      c = c.replace(/\n```\s*$/, "");
+      return c;
   };
 
   const Utils = {
     debounce,
     readAsDataURL,
+    sanitizeForLog,
+    ensureLogFile,
+    appendToFileHandle,
+    downloadText,
+    detectPython,
+    splitThinking,
+    hasEdits,
+    applyPatch,
 
-    // --- PARSING DES LLM OUTPUTS ---
-      parseResponse: (text) => {
-      const result = { files: {}, patches: {}, thought: null, usedFallback: false };
+    safeJsonParse: (str) => {
+      try { return JSON.parse(str); } catch { return null; }
+    },
 
-      if (!text || typeof text !== "string") {
-        return result;
-      }
-
-      // Newlines normalisieren
-      text = text.replace(/\r\n/g, "\n");
-
-      // optionaler <thinking> Block
-      const thoughtMatch = text.match(/<thinking>([\s\S]*?)<\/thinking>/i);
-      if (thoughtMatch) {
-        result.thought = thoughtMatch[1].trim();
-        text = text.replace(thoughtMatch[0], "");
-      }
-
-      // Helper um ```lang ... ``` zu entfernen
-      const stripCodeFence = (content) => {
-        return content
-          .replace(/^\s*```[a-zA-Z0-9]*\n?/, "")
-          .replace(/```\s*$/, "");
-      };
-
-      // PASS 1: Strikte Marker  <!-- filename: name.ext -->  /  <!-- patch: name.ext -->
-      const fileRegex =
-        /(?:<!--|\/\*)\s*filename:\s*([^\s]+?)\s*(?:-->| \*\/)([\s\S]*?)(?=(?:<!--|\/\*)\s*(?:filename|patch):|$)/gi;
-      let match;
-      while ((match = fileRegex.exec(text)) !== null) {
-        const filename = match[1].trim();
-        let content = match[2].trim();
-        content = stripCodeFence(content);
-        result.files[filename] = content;
-      }
-
-      const patchRegex =
-        /(?:<!--|\/\*)\s*patch:\s*([^\s]+?)\s*(?:-->| \*\/)([\s\S]*?)(?=(?:<!--|\/\*)\s*(?:filename|patch):|$)/gi;
-      while ((match = patchRegex.exec(text)) !== null) {
-        const filename = match[1].trim();
-        let content = match[2].trim();
-        content = stripCodeFence(content);
-        result.patches[filename] = content;
-      }
-
-      if (
-        Object.keys(result.files).length > 0 ||
-        Object.keys(result.patches).length > 0
-      ) {
-        return result;
-      }
-
-      // PASS 2: Lockere Marker wie
-      //   <!-- index.html -->
-      //   <!-- styles.css -->
-      //   // index.html
-      //   // js/app.js
-      //   /* components.js */
-      const looseRegex =
-        /(?:<!--|\/\*+|\/\/+)\s*([^\s]+?\.(?:html|css|js|json|md))\s*(?:-->| \*\/)?([\s\S]*?)(?=(?:<!--|\/\*+|\/\/+)\s*[^\s]+?\.(?:html|css|js|json|md)\s*(?:-->| \*\/)?|$)/gi;
-
-      while ((match = looseRegex.exec(text)) !== null) {
-        const filename = match[1].trim();
-        let content = match[2].trim();
-        content = stripCodeFence(content);
-        if (content) {
-          result.files[filename] = content;
+    streamSSE: async (res, onEvent) => {
+      if (!res || !res.body || !res.body.getReader) throw new Error('Streaming not supported.');
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        buffer = buffer.replace(/\r\n/g, '\n');
+        let idx;
+        while ((idx = buffer.indexOf('\n\n')) !== -1) {
+          const raw = buffer.slice(0, idx).trim();
+          buffer = buffer.slice(idx + 2);
+          if (!raw) continue;
+          const lines = raw.split('\n');
+          let event = '';
+          const dataLines = [];
+          for (const line of lines) {
+            if (line.startsWith('event:')) event = line.slice(6).trim();
+            else if (line.startsWith('data:')) dataLines.push(line.slice(5).trim());
+          }
+          const data = dataLines.join('\n');
+          const shouldStop = onEvent({ event, data });
+          if (shouldStop === true) { try { await reader.cancel(); } catch (e) {} return; }
         }
       }
-
-      if (
-        Object.keys(result.files).length > 0 ||
-        Object.keys(result.patches).length > 0
-      ) {
-        return result;
+      const tail = buffer.trim();
+      if (tail) {
+        const lines = tail.split('\n');
+        let event = '';
+        const dataLines = [];
+        for (const line of lines) {
+          if (line.startsWith('event:')) event = line.slice(6).trim();
+          else if (line.startsWith('data:')) dataLines.push(line.slice(5).trim());
+        }
+        const data = dataLines.join('\n');
+        if (data) { onEvent({ event, data }); }
       }
+    },
 
-      // PASS 3: Code Fences wie ```html ... ```, ```css ... ```, ```javascript ... ```
-      const fenceRegex = /```(\w+)?\n([\s\S]*?)```/g;
-      const blocks = [];
-      let fenceMatch;
-      while ((fenceMatch = fenceRegex.exec(text)) !== null) {
-        const lang = (fenceMatch[1] || "").toLowerCase();
-        const code = fenceMatch[2];
-        blocks.push({ lang, code });
-      }
+    parseResponse: (text) => {
+        const result = { files: {}, patches: {}, thought: null, usedFallback: false };
+        if (!text || typeof text !== "string") return result;
+        text = text.replace(/\r\n/g, "\n");
 
-      const inferFilesFromFences = (fenceBlocks) => {
-        const files = {};
-        if (!fenceBlocks || fenceBlocks.length === 0) return files;
-
-        // HTML Block finden
-        let htmlIndex = -1;
-        for (let i = 0; i < fenceBlocks.length; i++) {
-          const b = fenceBlocks[i];
-          if (b.lang === "html" || b.lang === "htm" || b.lang === "xml") {
-            htmlIndex = i;
-            break;
-          }
-          if (b.code.includes("<html") || b.code.includes("<!DOCTYPE html")) {
-            htmlIndex = i;
-            break;
-          }
+        const split = Utils.splitThinking(text);
+        if (split.thinking) {
+            result.thought = split.thinking.trim();
+            text = split.output;
         }
 
-        const htmlBlock = htmlIndex >= 0 ? fenceBlocks[htmlIndex] : null;
-        let cssBlocks = [];
-        let jsBlocks = [];
+        const stripCodeFence = (content) => (content || "").replace(/^\s*```[a-zA-Z0-9_-]*\s*\n?/, "").replace(/\n?```\s*$/, "");
+        
+        const parseMarkerLine = (line) => {
+          const t = (line || "").trim();
+          // Relaxed Regex: Matches "<!-- filename: foo.js -->" AND "<!-- filename: foo.js" (missing closing bracket)
+          let m = t.match(/^<!--\s*(filename|patch)\s*:\s*([^\s>]+)/i);
+          if (m) return { kind: m[1].toLowerCase(), name: m[2].trim() };
+          
+          m = t.match(/^\/\*+\s*(filename|patch)\s*:\s*([^\s*]+)/i);
+          if (m) return { kind: m[1].toLowerCase(), name: m[2].trim() };
+          
+          m = t.match(/^\/\/+\s*(filename|patch)\s*:\s*([^\s]+)/i);
+          if (m) return { kind: m[1].toLowerCase(), name: m[2].trim() };
+          return null;
+        };
 
-        fenceBlocks.forEach((b) => {
-          if (b.lang === "css") cssBlocks.push(b);
-          if (["js", "javascript", "jsx", "ts", "tsx"].includes(b.lang)) {
-            jsBlocks.push(b);
+        const parseLooseFileLabel = (line) => {
+          const t = (line || "").trim();
+          let m = t.match(/^<!--\s*([^\s]+?\.(?:html|css|js|mjs|json|md|txt|svg))\s*-->$/i);
+          if (m) return { name: m[1].trim() };
+          return null;
+        };
+
+        // Aggressively remove outer code fences for the whole block if present
+        const textNoFences = text.replace(/^```[\s\S]*?\n/, "").replace(/\n```\s*$/, "");
+
+        // PASS B: Strict Markers
+        {
+          const lines = textNoFences.split("\n");
+          let current = null;
+          let buf = [];
+          const commit = () => {
+            if (!current) return;
+            // Clean up buffer: remove explicit fences if the model wrapped the content INSIDE the marker
+            let content = buf.join("\n").trim();
+            content = stripInnerFences(content);
+            
+            // Remove the marker line itself if it got stuck in the buffer (rare)
+            content = content.replace(/^(?:<!--|\/\*+|\/\/+)\s*(?:filename|patch)\s*:\s*[^\n]+\n?/i, "");
+            
+            if (current.kind === "filename") result.files[current.name] = content;
+            else result.patches[current.name] = content;
+          };
+
+          for (const line of lines) {
+            // Check for marker
+            const marker = parseMarkerLine(line);
+            if (marker) {
+              if (current) commit();
+              current = marker;
+              buf = [];
+              continue;
+            }
+            if (current) buf.push(line);
           }
-        });
-
-        let cssNames = [];
-        let jsNames = [];
-
-        if (htmlBlock) {
-          const htmlName = "index.html";
-          const htmlCode = htmlBlock.code.trim();
-          files[htmlName] = htmlCode;
-
-          // Dateinamen aus <link href="...css"> und <script src="...js"> lesen
-          const cssRegex = /href=["']([^"']+\.css)["']/gi;
-          let m;
-          while ((m = cssRegex.exec(htmlCode)) !== null) {
-            cssNames.push(m[1]);
-          }
-
-          const jsRegex = /src=["']([^"']+\.js)["']/gi;
-          while ((m = jsRegex.exec(htmlCode)) !== null) {
-            jsNames.push(m[1]);
-          }
+          if (current) commit();
         }
 
-        // CSS Blocks zuordnen
-        if (cssBlocks.length > 0) {
-          if (cssNames.length > 0) {
-            cssBlocks.forEach((b, idx) => {
-              const name = cssNames[idx] || cssNames[cssNames.length - 1];
-              files[name] = b.code.trim();
-            });
-          } else if (cssBlocks.length === 1) {
-            files["styles.css"] = cssBlocks[0].code.trim();
-          } else {
-            cssBlocks.forEach((b, idx) => {
-              const suffix = idx === 0 ? "" : String(idx + 1);
-              files[`styles${suffix}.css`] = b.code.trim();
-            });
+        if (Object.keys(result.files).length > 0 || Object.keys(result.patches).length > 0) return result;
+
+        // PASS C: Loose Labels (Fallback)
+        {
+          const lines = textNoFences.split("\n");
+          let current = null;
+          let buf = [];
+          const commit = () => {
+            if (!current) return;
+            let content = buf.join("\n").trim();
+            content = stripInnerFences(content);
+            if (content) result.files[current.name] = content;
+          };
+          for (const line of lines) {
+            const label = parseLooseFileLabel(line);
+            if (label) {
+              if (current) commit();
+              current = label;
+              buf = [];
+              continue;
+            }
+            if (current) buf.push(line);
           }
+          if (current) commit();
         }
 
-        // JS Blocks zuordnen
-        if (jsBlocks.length > 0) {
-          if (jsNames.length > 0) {
-            jsBlocks.forEach((b, idx) => {
-              const name = jsNames[idx] || jsNames[jsNames.length - 1];
-              files[name] = b.code.trim();
-            });
-          } else if (jsBlocks.length === 1) {
-            files["script.js"] = jsBlocks[0].code.trim();
-          } else {
-            jsBlocks.forEach((b, idx) => {
-              const suffix = idx === 0 ? "" : String(idx + 1);
-              files[`script${suffix}.js`] = b.code.trim();
-            });
-          }
-        }
+        if (Object.keys(result.files).length > 0 || Object.keys(result.patches).length > 0) return result;
 
-        return files;
-      };
-
-      if (blocks.length > 0) {
-        const filesFromFences = inferFilesFromFences(blocks);
-        if (Object.keys(filesFromFences).length > 0) {
-          Object.assign(result.files, filesFromFences);
-          return result;
-        }
-      }
-
-      // Fallback: reines HTML ohne Marker / Fences
-      if (
-        Object.keys(result.files).length === 0 &&
-        Object.keys(result.patches).length === 0
-      ) {
+        // Fallback: HTML Detection
         const htmlFallbackMatch = text.match(/<!DOCTYPE html|<html/i);
-        if (
-          htmlFallbackMatch &&
-          typeof htmlFallbackMatch.index === "number"
-        ) {
+        if (htmlFallbackMatch && typeof htmlFallbackMatch.index === "number") {
           const idx = htmlFallbackMatch.index;
           result.files["index.html"] = text.slice(idx).trim();
           result.usedFallback = true;
         }
-      }
 
-      return result;
+        return result;
     },
 
+    extractHtmlReferences: (html) => {
+        const scripts = [];
+        const styles = [];
+        if (!html || typeof html !== "string") return { scripts, styles };
+        const addUnique = (arr, val) => { if (val && !arr.includes(val)) arr.push(val); };
+        const scriptRe = /<script[^>]+src\s*=\s*["']([^"']+)["'][^>]*>/gi;
+        let m;
+        while ((m = scriptRe.exec(html))) addUnique(scripts, m[1]);
+        const linkRe = /<link[^>]*href\s*=\s*["']([^"']+\.css(?:\?[^"']*)?)["'][^>]*>/gi;
+        while ((m = linkRe.exec(html))) addUnique(styles, m[1]);
+        return { scripts, styles };
+    },
+
+    normalizeParsedOutput: (currentFiles, parsed) => {
+        const warnings = [];
+        const out = { ...parsed, files: { ...(parsed.files || {}) }, patches: { ...(parsed.patches || {}) } };
+        const safeTrimEnd = (s) => String(s ?? "").replace(/\r\n/g, "\n").replace(/\s+$/g, "");
+        const escapeRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        
+        // Final sanity clean check
+        const sanitizeFileContent = (filename, content) => {
+          let c = stripInnerFences(content);
+          return safeTrimEnd(c);
+        };
+
+        for (const [name, content] of Object.entries(out.files)) {
+          out.files[name] = sanitizeFileContent(name, content);
+        }
+
+        const baseIndex = out.files["index.html"] || currentFiles["index.html"] || "";
+        const refs = Utils.extractHtmlReferences(baseIndex);
+        const referenced = new Set([...(refs.scripts || []), ...(refs.styles || [])]);
+        
+        const keepFiles = {};
+        const variantCandidates = { "script.js": [], "styles.css": [] };
+        const hasOrWillHaveBase = (base) => Object.prototype.hasOwnProperty.call(currentFiles, base) || Object.prototype.hasOwnProperty.call(out.files, base) || referenced.has(base);
+
+        for (const [name, content] of Object.entries(out.files)) {
+          if (Object.prototype.hasOwnProperty.call(currentFiles, name) || referenced.has(name)) {
+            keepFiles[name] = content;
+            continue;
+          }
+          const lower = name.toLowerCase();
+          if (/^script\d+\.js$/.test(lower) && hasOrWillHaveBase("script.js")) {
+            variantCandidates["script.js"].push({ name, content });
+            continue;
+          }
+          if (/^styles\d+\.css$/.test(lower) && hasOrWillHaveBase("styles.css")) {
+            variantCandidates["styles.css"].push({ name, content });
+            continue;
+          }
+          warnings.push(`Ignored unreferenced new file: ${name}`);
+        }
+
+        for (const base of Object.keys(variantCandidates)) {
+          const candidates = variantCandidates[base];
+          if (!candidates || candidates.length === 0) continue;
+          let best = candidates[0];
+           for (const c of candidates) {
+            if ((c.content || "").length >= (best.content || "").length) best = c;
+          }
+          if (best.name !== base) warnings.push(`Mapped ${best.name} -> ${base} (variant file not referenced).`);
+          keepFiles[base] = best.content;
+        }
+
+        const keepPatches = {};
+        for (const [name, patchList] of Object.entries(out.patches || {})) {
+          if (Object.prototype.hasOwnProperty.call(currentFiles, name) || Object.prototype.hasOwnProperty.call(keepFiles, name) || referenced.has(name)) {
+            keepPatches[name] = patchList;
+          } else {
+            warnings.push(`Ignored patch for unknown/unreferenced file: ${name}`);
+          }
+        }
+
+        out.files = keepFiles;
+        out.patches = keepPatches;
+        out.warnings = warnings;
+        return out;
+    },
 
     applyPatchesToFiles: (currentFiles, patches) => {
       const updatedFiles = { ...currentFiles };
@@ -287,206 +512,123 @@
       return updatedFiles;
     },
 
-    // --- PREVIEW GENERATION: baut ein eigenstaendiges HTML mit inline JS/CSS/IMAGES ---
     createPreviewSession: (files) => {
       const toRevoke = [];
-
-      if (!files['index.html']) {
-        return { url: '', cleanup: () => {} };
-      }
-
+      if (!files['index.html']) return { url: '', cleanup: () => {} };
       let html = files['index.html'];
 
       const resolveKey = (filename) => {
         if (!filename) return null;
-        let clean = filename.split('?')[0]; // Remove query params
-
+        let clean = filename.split('?')[0];
         if (files[clean] != null) return clean;
-
-        clean = clean.replace(/^\/+/, ''); // Remove leading slash
+        clean = clean.replace(/^\/+/, '');
         if (files[clean] != null) return clean;
-
         const parts = clean.split(/[\\/]/).filter(Boolean);
         const joined = parts.join('/');
         if (files[joined] != null) return joined;
-
         const base = parts[parts.length - 1];
         if (files[base] != null) return base;
-        
         const found = Object.keys(files).find(k => k.endsWith(base));
         if (found) return found;
-
         return null;
       };
 
-      // 1. CSS Links inline einbetten (verhindert FOUC und behandelt externe Links korrekt)
-      html = html.replace(
-        /<link\b[^>]*\bhref=["']([^"']+)["'][^>]*>/gi,
-        (match, href) => {
+      html = html.replace(/<link\b[^>]*\bhref=["']([^"']+)["'][^>]*>/gi, (match, href) => {
           const key = resolveKey(href);
-          if (key && files[key] != null) {
-            return `<style>\n/* Inlined from ${href} */\n${files[key]}\n</style>`;
-          }
-          // Return original match if local file not found (keeps CDN links intact)
-          return match;
-        }
-      );
+          return (key && files[key] != null) ? `<style>\n/* Inlined from ${href} */\n${files[key]}\n</style>` : match;
+      });
 
-      // 2. Script src Tags umschreiben: Inlining statt Blob URLs fuer maximale Kompatibilitaet
-      html = html.replace(
-        /<script\b([^>]*?)\bsrc=["']([^"']+)["']([^>]*)>([\s\S]*?)<\/script>/gi,
-        (match, before, src, after, inner) => {
+      html = html.replace(/<script\b([^>]*?)\bsrc=["']([^"']+)["']([^>]*)>([\s\S]*?)<\/script>/gi, (match, before, src, after) => {
+          const key = resolveKey(src);
+          return (key && files[key] != null) ? `<script${before}${after}>\n// Inlined from ${src}\n${files[key]}\n</script>` : match;
+      });
+
+      html = html.replace(/<img\b([^>]*?)src=["']([^"']+)["']([^>]*)>/gi, (match, before, src, after) => {
+          if (src.startsWith('data:') || src.startsWith('http')) return match;
           const key = resolveKey(src);
           if (key && files[key] != null) {
-             // Inhalt direkt in den Script-Tag schreiben und src-Attribut entfernen
-             // Dies funktioniert zuverlässiger als Blob-URLs im Sandbox-Iframe
-             return `<script${before}${after}>\n// Inlined from ${src}\n${files[key]}\n</script>`;
+              let content = files[key];
+              if (!content.startsWith('data:') && (key.endsWith('.svg') || content.trim().startsWith('<svg'))) {
+                  content = `data:image/svg+xml;base64,${btoa(content)}`;
+              }
+              return `<img${before}src="${content}"${after}>`;
           }
           return match;
-        }
-      );
+      });
 
-      // 3. Images inline einbetten
-      html = html.replace(
-        /<img\b([^>]*?)src=["']([^"']+)["']([^>]*)>/gi,
-        (match, before, src, after) => {
-            if (src.startsWith('data:') || src.startsWith('http')) return match;
+      html = html.replace(/<script\b[^>]*src=["'][^"']+\.(ts|tsx)["'][^>]*><\/script>/gi, '');
 
-            const key = resolveKey(src);
-            if (key && files[key] != null) {
-                let content = files[key];
-                if (!content.startsWith('data:') && (key.endsWith('.svg') || content.trim().startsWith('<svg'))) {
-                    content = `data:image/svg+xml;base64,${btoa(content)}`;
-                }
-                return `<img${before}src="${content}"${after}>`;
-            }
-            return match;
-        }
-      );
-
-      // TS / TSX entfernen
-      html = html.replace(
-        /<script\b[^>]*src=["'][^"']+\.(ts|tsx)["'][^>]*><\/script>/gi,
-        ''
-      );
-
-      // Fehler und Point & Vibe Bridge + Console Capture
       const errorScript = `
         <script>
           (function() {
             window.__VC_POINT_VIBE_ENABLED__ = false;
-            
-            // Console Proxy
             var originalLog = console.log;
             var originalError = console.error;
-            
             console.error = function() {
                 var args = Array.from(arguments);
                 originalError.apply(console, args);
-                try {
-                    if (window.parent) {
-                        window.parent.postMessage({
-                            type: 'iframe-error',
-                            message: args.map(String).join(' '),
-                            source: 'console'
-                        }, '*');
-                    }
-                } catch(e) {}
+                try { if (window.parent) window.parent.postMessage({ type: 'iframe-error', message: args.map(String).join(' '), source: 'console' }, '*'); } catch(e) {}
             };
-
-            window.addEventListener('message', function(event) {
-              try {
-                if (!event || !event.data || typeof event.data !== 'object') return;
-                if (event.data.type === 'toggle-point-vibe') {
-                  window.__VC_POINT_VIBE_ENABLED__ = !!event.data.enabled;
-                }
-              } catch (e) {}
-            });
-
+            window.addEventListener('message', function(event) { try { if (event.data.type === 'toggle-point-vibe') window.__VC_POINT_VIBE_ENABLED__ = !!event.data.enabled; } catch (e) {} });
             window.addEventListener('click', function(ev) {
               try {
                 if (!window.__VC_POINT_VIBE_ENABLED__) return;
                 var target = ev.target;
                 if (!target) return;
-
-                ev.preventDefault();
-                ev.stopPropagation();
-
+                ev.preventDefault(); ev.stopPropagation();
                 var rect = target.getBoundingClientRect();
-                var payload = {
-                  type: 'iframe-point',
-                  tag: target.tagName || '',
-                  text: (target.innerText || target.textContent || '').slice(0, 200),
-                  classes: target.className || '',
-                  id: target.id || '',
-                  rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
-                };
-
-                if (window.parent) {
-                  window.parent.postMessage(payload, '*');
-                }
+                var payload = { type: 'iframe-point', tag: target.tagName || '', text: (target.innerText || target.textContent || '').slice(0, 200), classes: target.className || '', id: target.id || '', rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } };
+                if (window.parent) window.parent.postMessage(payload, '*');
               } catch (e) {}
             }, true);
-
-            window.onerror = function(message, source, lineno, colno, error) {
-              try {
-                if (window.parent) {
-                  window.parent.postMessage(
-                    { type: 'iframe-error', message: message, source: source, line: lineno, column: colno },
-                    '*'
-                  );
-                }
-              } catch (e) {}
-            };
+            window.onerror = function(message, source, lineno, colno, error) { try { if (window.parent) window.parent.postMessage({ type: 'iframe-error', message: message, source: source, line: lineno, column: colno }, '*'); } catch (e) {} };
           })();
         </script>
       `;
 
-      if (html.includes('</head>')) {
-        html = html.replace('</head>', `${errorScript}\n</head>`);
-      } else {
-        html = errorScript + html;
-      }
+      html = html.includes('</head>') ? html.replace('</head>', `${errorScript}\n</head>`) : errorScript + html;
 
       const blob = new Blob([html], { type: 'text/html' });
       const url = URL.createObjectURL(blob);
       toRevoke.push(url);
 
-      return {
-        url,
-        cleanup: () => {
-          toRevoke.forEach(u => URL.revokeObjectURL(u));
-        }
-      };
+      return { url, cleanup: () => { toRevoke.forEach(u => URL.revokeObjectURL(u)); } };
     },
 
-    // --- API UND IO ---
     fetchModels: async (baseUrl) => {
+      const root = normalizeRootUrl(baseUrl);
       try {
-        const url = baseUrl
-          .replace(/\/chat\/completions$/, '')
-          .replace(/\/v1$/, '')
-          .replace(/\/$/, '');
-        const res = await fetch(`${url}/v1/models`);
+        const res = await fetch(`${root}/api/v0/models`);
+        if (res.ok) {
+          const data = await res.json();
+          const list = data.data || data.models || data || [];
+          const arr = Array.isArray(list) ? list : [];
+          if (arr.length) return arr;
+        }
+      } catch {}
+      try {
+        const res = await fetch(`${root}/v1/models`);
+        if (!res.ok) return [];
         const data = await res.json();
         return data.data || [];
-      } catch {
-        return [];
-      }
+      } catch { return []; }
     },
 
-    getDirHandle: async () => {
+    getModelInfo: async (baseUrl, modelId) => {
       try {
-        return await window.showDirectoryPicker({ mode: 'readwrite' });
-      } catch {
-        return null;
-      }
+        const root = normalizeRootUrl(baseUrl);
+        const safeId = encodeURIComponent(modelId || '');
+        const res = await fetch(`${root}/api/v0/models/${safeId}`);
+        if (!res.ok) return null;
+        return await res.json();
+      } catch { return null; }
     },
+
+    getDirHandle: async () => { try { return await window.showDirectoryPicker({ mode: 'readwrite' }); } catch { return null; } },
 
     readFiles: async (handle) => {
       const files = {};
       if (!handle) return files;
-
       const readEntry = async (entry, path = '') => {
           if (entry.kind === 'file') {
               const ext = entry.name.split('.').pop().toLowerCase();
@@ -504,30 +646,20 @@
               }
           }
       };
-
-      for await (const entry of handle.values()) {
-          await readEntry(entry);
-      }
-
+      for await (const entry of handle.values()) await readEntry(entry);
       return files;
     },
 
     saveFiles: async (handle, files) => {
       if (!handle) return;
-      
       for (const [name, content] of Object.entries(files)) {
         try {
             const parts = name.split('/');
             const fileName = parts.pop();
             let currentDir = handle;
-
-            for (const part of parts) {
-                currentDir = await currentDir.getDirectoryHandle(part, { create: true });
-            }
-
+            for (const part of parts) currentDir = await currentDir.getDirectoryHandle(part, { create: true });
             const fh = await currentDir.getFileHandle(fileName, { create: true });
             const w = await fh.createWritable();
-
             if (content.startsWith('data:image')) {
                  const res = await fetch(content);
                  const blob = await res.blob();
@@ -536,9 +668,7 @@
                  await w.write(content);
             }
             await w.close();
-        } catch (e) {
-          console.error(`Failed to save ${name}:`, e);
-        }
+        } catch (e) { console.error(`Failed to save ${name}:`, e); }
       }
     }
   };

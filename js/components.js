@@ -3,7 +3,6 @@
   const { useState, useEffect, useRef, useLayoutEffect } = React;
   const { Icons } = window.VC.Components || { Icons: {} };
 
-  // --- GLOBAL STYLES ---
   const Styles = () => {
     useEffect(() => {
       if (!document.getElementById('vc-styles')) {
@@ -57,7 +56,6 @@
     return null;
   };
 
-  // --- SVG ICONS ---
   const Icon = ({ name, size = 18, className = "" }) => {
     const paths = {
       Settings: '<circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>',
@@ -84,23 +82,25 @@
       Smartphone: '<rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect><line x1="12" y1="18" x2="12.01" y2="18"></line>',
       Tablet: '<rect x="4" y="2" width="16" height="20" rx="2" ry="2"></rect><line x1="12" y1="18" x2="12.01" y2="18"></line>',
       Monitor: '<rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line>',
-      Rotate: '<path d="M23 4v6h-6"></path><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>'
+      Rotate: '<path d="M23 4v6h-6"></path><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>',
+      Terminal: '<polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line>'
     };
     return html`<svg width=${size} height=${size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className=${className} dangerouslySetInnerHTML=${{__html: paths[name] || ''}}></svg>`;
   };
 
-  // --- STATUS BAR ---
   const StatusBar = ({ status, message }) => {
-    if (status === 'idle' && !message) return null;
-
+    if ((!status || status === 'idle') && !message) return null;
     let iconName = 'Sparkles';
     let colorClass = 'text-purple-400';
     let animateClass = '';
 
     if (status === 'reading') { iconName = 'Folder'; colorClass = 'text-blue-400'; animateClass = 'animate-pulse'; }
+    else if (status === 'loading') { iconName = 'Package'; colorClass = 'text-indigo-400'; animateClass = 'animate-pulse'; }
+    else if (status === 'connecting') { iconName = 'Zap'; colorClass = 'text-yellow-300'; animateClass = 'animate-pulse'; }
     else if (status === 'thinking') { iconName = 'Zap'; colorClass = 'text-yellow-400'; animateClass = 'animate-pulse'; }
     else if (status === 'generating') { iconName = 'Code'; colorClass = 'text-green-400'; animateClass = 'animate-bounce'; }
-    else if (status === 'patching') { iconName = 'Refresh'; colorClass = 'text-orange-400'; animateClass = 'animate-spin'; }
+    else if (status === 'applying') { iconName = 'Refresh'; colorClass = 'text-orange-400'; animateClass = 'animate-spin'; }
+    else if (status === 'error') { iconName = 'Alert'; colorClass = 'text-red-400'; animateClass = ''; }
 
     return html`
       <div className="status-bar-gradient px-4 py-2 flex items-center gap-3 text-xs font-mono text-gray-300 border-b border-gray-800">
@@ -112,37 +112,154 @@
     `;
   };
 
-  // --- CODE PREVIEW ---
-  const CodePreview = ({ files, activeFile, setActiveFile, viewMode, setViewMode, onFileChange, modifiedFiles = [], onOpenHistory }) => {
+  const ChatMessage = ({ message, msg }) => {
+    const [thinkingOpen, setThinkingOpen] = useState(false);
+    const m = message || msg;
+    if (!m) return null;
+    const role = m.role || 'assistant';
+    const isUser = role === 'user';
+    const thinking = (m.thinking || '').toString();
+    const output = (m.output != null ? m.output : (m.content || '')).toString();
+    const isStreaming = !!m.isStreaming;
+
+    if (isUser) {
+      return html`
+        <div className="flex flex-col items-end">
+          <div className="max-w-[90%] rounded-xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap break-words shadow-sm bg-blue-600 text-white rounded-br-none">
+            ${m.content}
+          </div>
+        </div>
+      `;
+    }
+
+    const hasThinking = thinking.trim().length > 0;
+    const thinkingHint = thinking.replace(/\s+/g, ' ').slice(-90);
+
+    return html`
+      <div className="flex flex-col items-start">
+        <div className="max-w-[90%] rounded-xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap break-words shadow-sm bg-gray-900 border border-gray-800 text-gray-300 rounded-bl-none">
+          ${hasThinking && html`
+            <div className="mb-2 pb-2 border-b border-gray-800">
+              <button
+                className="w-full flex items-center gap-2 text-[11px] font-mono text-gray-400 hover:text-gray-200 transition select-none"
+                onClick=${() => setThinkingOpen(v => !v)}
+                title="Toggle thinking"
+              >
+                <span className=${`inline-block ${isStreaming ? 'animate-pulse text-purple-300' : 'text-purple-300'}`}>Thinking</span>
+                <span className="text-gray-600">${thinkingOpen ? '▾' : '▸'}</span>
+                ${!thinkingOpen && thinkingHint && html`<span className="truncate text-gray-500">${thinkingHint}</span>`}
+              </button>
+              ${thinkingOpen && html`<pre className="mt-2 text-[12px] leading-relaxed whitespace-pre-wrap break-words font-mono text-gray-400 max-h-56 overflow-y-auto custom-scrollbar">${thinking}</pre>`}
+            </div>
+          `}
+          <div className="text-sm whitespace-pre-wrap break-words">${output}</div>
+        </div>
+      </div>
+    `;
+  };
+
+  const StreamDock = ({ kind = 'thinking', text = '', isActive = false, onClear }) => {
+    const [open, setOpen] = useState(true);
+    useEffect(() => { if (isActive) setOpen(true); }, [isActive, kind]);
+    if (!text) return null;
+    const label = kind === 'output' ? 'Output stream' : 'Thinking stream';
+    const hint = (text || '').replace(/\s+/g, ' ').slice(-140);
+    const border = kind === 'output' ? 'border-green-500/30' : 'border-purple-500/30';
+    const titleColor = kind === 'output' ? 'text-green-300' : 'text-purple-300';
+
+    return html`
+      <div className="px-4 pb-3">
+        <div className=${`bg-gray-900 border ${border} rounded-xl overflow-hidden`}>
+          <div className="w-full flex items-center gap-3 px-3 py-2 text-[11px] font-mono text-gray-300 hover:bg-gray-800/40 transition cursor-pointer select-none" onClick=${() => setOpen(v => !v)} title="Toggle stream">
+            <span className=${`font-bold ${titleColor}`}>${label}</span>
+            <span className="text-gray-500 truncate">${open ? '' : hint}</span>
+            <div className="ml-auto flex items-center gap-2">
+              <button className="text-gray-500 hover:text-gray-200 px-2 py-1 rounded border border-gray-800 hover:border-gray-700" onClick=${(e) => { e.stopPropagation(); try { navigator.clipboard.writeText(text); } catch {} }} title="Copy">Copy</button>
+              <button className="text-gray-500 hover:text-red-300 px-2 py-1 rounded border border-gray-800 hover:border-red-500/40" onClick=${(e) => { e.stopPropagation(); onClear && onClear(); }} title="Clear">Clear</button>
+              <span className="text-gray-500">${open ? '▾' : '▸'}</span>
+            </div>
+          </div>
+          ${open && html`<div className="max-h-48 overflow-y-auto custom-scrollbar border-t border-gray-800"><pre className="p-3 text-[11px] leading-relaxed whitespace-pre-wrap break-words font-mono text-gray-400">${text}</pre></div>`}
+        </div>
+      </div>
+    `;
+  };
+
+  const LogDock = ({ logs = [], onClear }) => {
+    const [open, setOpen] = useState(false);
+    if (!logs || logs.length === 0) return null;
+    const last = logs[logs.length - 1];
+    const hint = (last && last.message ? String(last.message) : '').replace(/\s+/g, ' ').slice(-140);
+
+    return html`
+      <div className="px-4 pb-3">
+        <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+          <div className="w-full flex items-center gap-3 px-3 py-2 text-[11px] font-mono text-gray-300 hover:bg-gray-800/40 transition cursor-pointer select-none" onClick=${() => setOpen(v => !v)} title="Toggle logs">
+            <span className="font-bold text-cyan-300">Logs</span>
+            <span className="text-gray-500 truncate">${open ? '' : hint}</span>
+            <div className="ml-auto flex items-center gap-2">
+              <button className="text-gray-500 hover:text-gray-200 px-2 py-1 rounded border border-gray-800 hover:border-gray-700" onClick=${(e) => { e.stopPropagation(); try { const blob = logs.map(l => { const ts = l.ts ? new Date(l.ts).toLocaleTimeString() : ''; const lvl = (l.level || 'info').toUpperCase(); return `[${ts}] ${lvl}: ${l.message}`; }).join('\n'); navigator.clipboard.writeText(blob); } catch {} }} title="Copy">Copy</button>
+              <button className="text-gray-500 hover:text-red-300 px-2 py-1 rounded border border-gray-800 hover:border-red-500/40" onClick=${(e) => { e.stopPropagation(); onClear && onClear(); }} title="Clear">Clear</button>
+              <span className="text-gray-500">${open ? '▾' : '▸'}</span>
+            </div>
+          </div>
+          ${open && html`<div className="max-h-56 overflow-y-auto custom-scrollbar border-t border-gray-800"><pre className="p-3 text-[11px] leading-relaxed whitespace-pre-wrap break-words font-mono text-gray-400">${logs.map(l => { const ts = l.ts ? new Date(l.ts).toLocaleTimeString() : ''; const lvl = (l.level || 'info').toUpperCase(); return `[${ts}] ${lvl}: ${l.message}`; }).join('\n')}</pre></div>`}
+        </div>
+      </div>
+    `;
+  };
+
+  const LogsModal = ({ isOpen, onClose, logs = [], onClear, onCopy, sessionLogText = '', sessionLogFileName = '', onCopySessionLog, onDownloadSessionLog }) => {
+    const [query, setQuery] = useState('');
+    if (!isOpen) return null;
+    const normalizedQ = (query || '').trim().toLowerCase();
+    const filtered = !normalizedQ ? logs : logs.filter(l => { const ts = l.ts ? new Date(l.ts).toLocaleTimeString() : ''; const lvl = (l.level || 'info').toLowerCase(); const msg = String(l.message || '').toLowerCase(); return `${ts} ${lvl} ${msg}`.includes(normalizedQ); });
+    const toText = (arr) => (arr || []).map(l => { const ts = l.ts ? new Date(l.ts).toLocaleTimeString() : ''; const lvl = (l.level || 'info').toUpperCase(); return `[${ts}] ${lvl}: ${l.message}`; }).join('\n');
+    const handleCopy = async () => { try { if (onCopy) return onCopy(); await navigator.clipboard.writeText(toText(filtered)); } catch {} };
+
+    return html`
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm" onClick=${onClose}>
+        <div className="bg-gray-900 border border-gray-800 rounded-xl w-[820px] max-w-[95%] h-[80vh] shadow-2xl overflow-hidden flex flex-col" onClick=${(e) => e.stopPropagation()}>
+          <div className="p-4 border-b border-gray-800 flex items-center justify-between">
+            <div className="flex items-center gap-2"><${Icon} name="Terminal" /><h3 className="font-bold text-white">Logs</h3><span className="text-xs text-gray-500 font-mono">${filtered.length}/${logs.length}</span></div>
+            <button onClick=${onClose} className="text-gray-400 hover:text-white" title="Close"><${Icon} name="Close" /></button>
+          </div>
+          <div className="p-4 border-b border-gray-800 flex items-center gap-2">
+            <input value=${query} onInput=${(e) => setQuery(e.target.value)} placeholder="Filter (text / level)" className="flex-1 bg-gray-950 border border-gray-800 rounded px-3 py-2 text-sm text-gray-200 outline-none focus:border-purple-500" />
+            <button onClick=${handleCopy} className="px-3 py-2 text-sm bg-gray-800 hover:bg-gray-700 text-gray-200 rounded border border-gray-700 transition" title="Copy filtered logs">Copy</button>
+            ${onCopySessionLog ? html`<button onClick=${onCopySessionLog} className="px-3 py-2 text-sm bg-gray-800 hover:bg-gray-700 text-gray-200 rounded border border-gray-700 transition" title="Copy full session log">Copy session</button>` : null}
+            ${onDownloadSessionLog ? html`<button onClick=${onDownloadSessionLog} className="px-3 py-2 text-sm bg-gray-800 hover:bg-gray-700 text-gray-200 rounded border border-gray-700 transition" title="Download full session log as .txt">Download session</button>` : null}
+            <button onClick=${() => onClear && onClear()} className="px-3 py-2 text-sm bg-gray-800 hover:bg-gray-700 text-red-200 rounded border border-red-700/30 hover:border-red-500/40 transition" title="Clear logs">Clear</button>
+          </div>
+          <div className="flex-1 overflow-y-auto custom-scrollbar">
+            <div className="px-4 py-2 text-xs text-gray-500 border-b border-gray-800">Session log: ${sessionLogFileName ? html`<span className="text-gray-300">${sessionLogFileName}</span>` : html`<span>not persisted (virtual mode) — use “Download session”</span>`}</div>
+            ${filtered.length === 0 ? html`<div className="p-8 text-center text-gray-500">No logs.</div>` : html`<pre className="p-4 text-[11px] leading-relaxed whitespace-pre-wrap break-words font-mono text-gray-300">${toText(filtered)}</pre>`}
+          </div>
+        </div>
+      </div>
+    `;
+  };
+
+  const CodePreview = ({ files, activeFile, setActiveFile, viewMode, setViewMode, onFileChange, modifiedFiles = [], onOpenLogs, onOpenHistory }) => {
     const [iframeUrl, setIframeUrl] = useState(null);
     const [isPlaying, setIsPlaying] = useState(true);
-    
-    // Responsive State
-    const [deviceMode, setDeviceMode] = useState('full'); // full | mobile | tablet | desktop
-    const [orientation, setOrientation] = useState('portrait'); // portrait | landscape
+    const [deviceMode, setDeviceMode] = useState('full');
+    const [orientation, setOrientation] = useState('portrait');
     const [scaleFactor, setScaleFactor] = useState(1);
-    
     const [copied, setCopied] = useState(false);
     const [pointMode, setPointMode] = useState(false);
     const cleanupRef = useRef(null);
     const containerRef = useRef(null);
     const iframeRef = useRef(null);
     
-    // Dateibaum aufbauen
     const buildFileTree = () => {
       const root = {};
       Object.keys(files || {}).forEach(path => {
         const parts = path.split('/');
         let current = root;
         parts.forEach((part, index) => {
-          if (!current[part]) {
-            current[part] = { children: {}, isFile: index === parts.length - 1 };
-          }
-          if (index === parts.length - 1) {
-            current[part].isFile = true;
-          } else {
-            current[part].isFile = false;
-          }
+          if (!current[part]) { current[part] = { children: {}, isFile: index === parts.length - 1 }; }
+          if (index === parts.length - 1) { current[part].isFile = true; } else { current[part].isFile = false; }
           current = current[part].children;
         });
       });
@@ -157,16 +274,8 @@
           const isActive = activeFile === fullPath;
           const isModified = modifiedFiles.includes(fullPath);
           return html`
-            <button
-              key=${fullPath}
-              onClick=${() => setActiveFile(fullPath)}
-              className=${`w-full text-left px-3 py-1.5 text-[12px] font-mono flex items-center gap-2 ${
-                isActive ? 'bg-gray-800 text-white' : 'text-gray-300 hover:bg-gray-800/60'
-              }`}
-            >
-              <span className=${`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
-                  isModified ? 'bg-yellow-400 animate-pulse' : (isActive ? 'bg-purple-400' : 'bg-gray-600')
-              }`}></span>
+            <button key=${fullPath} onClick=${() => setActiveFile(fullPath)} className=${`w-full text-left px-3 py-1.5 text-[12px] font-mono flex items-center gap-2 ${isActive ? 'bg-gray-800 text-white' : 'text-gray-300 hover:bg-gray-800/60'}`}>
+              <span className=${`w-1.5 h-1.5 rounded-full flex-shrink-0 ${isModified ? 'bg-yellow-400 animate-pulse' : (isActive ? 'bg-purple-400' : 'bg-gray-600')}`}></span>
               <span className=${`truncate ${isModified ? 'text-yellow-100' : ''}`}>${name}</span>
               ${isModified && html`<span className="text-[9px] text-yellow-500 ml-auto font-bold">MOD</span>`}
             </button>
@@ -174,13 +283,8 @@
         } else {
           return html`
             <div key=${fullPath} className="mb-1">
-              <div className="flex items-center gap-2 px-3 py-1.5 text-[11px] uppercase tracking-wide text-gray-500">
-                 <span className="text-gray-600">▾</span>
-                 <span className="truncate">${name}</span>
-              </div>
-              <div className="ml-3 border-l border-gray-800">
-                ${renderTree(node.children, fullPath)}
-              </div>
+              <div className="flex items-center gap-2 px-3 py-1.5 text-[11px] uppercase tracking-wide text-gray-500"><span className="text-gray-600">▾</span><span className="truncate">${name}</span></div>
+              <div className="ml-3 border-l border-gray-800">${renderTree(node.children, fullPath)}</div>
             </div>
           `;
         }
@@ -189,423 +293,186 @@
 
     const fileTree = buildFileTree();
     
-    // Handle Preview Generation
     useEffect(() => {
       if (viewMode === 'preview' && files['index.html']) {
         if (cleanupRef.current) cleanupRef.current();
-
         if (isPlaying) {
           try {
               const { url, cleanup } = window.VC.Utils.createPreviewSession(files);
               setIframeUrl(url);
               cleanupRef.current = cleanup;
-          } catch(e) {
-              console.error("Preview Gen Failed", e);
-              setIframeUrl(null);
-          }
-        } else {
-            setIframeUrl(null);
-        }
+          } catch(e) { console.error("Preview Gen Failed", e); setIframeUrl(null); }
+        } else { setIframeUrl(null); }
       }
-
-      return () => {
-        if (cleanupRef.current) {
-            cleanupRef.current();
-            cleanupRef.current = null;
-        }
-      };
+      return () => { if (cleanupRef.current) { cleanupRef.current(); cleanupRef.current = null; } };
     }, [files, viewMode, isPlaying]);
 
-    // Point & Vibe Modus in das iframe schicken
     useEffect(() => {
       if (viewMode !== 'preview') return;
       const iframe = iframeRef.current;
       if (!iframe || !iframe.contentWindow) return;
-      try {
-        iframe.contentWindow.postMessage(
-          { type: 'toggle-point-vibe', enabled: pointMode },
-          '*'
-        );
-      } catch (e) {
-        console.error('Point & Vibe toggle failed', e);
-      }
+      try { iframe.contentWindow.postMessage({ type: 'toggle-point-vibe', enabled: pointMode }, '*'); } catch (e) { console.error('Point & Vibe toggle failed', e); }
     }, [pointMode, iframeUrl, viewMode]);
 
-    // --- INTELLIGENT RESPONSIVE SCALING ---
-    // Berechnet den Scale-Faktor, damit das simulierte Gerät (z.B. 1280px Desktop)
-    // in den kleinen Vorschau-Container passt.
     useLayoutEffect(() => {
       if (viewMode !== 'preview' || !containerRef.current) return;
-
       const calculateScale = () => {
          const wrapper = containerRef.current;
-         const availWidth = wrapper.offsetWidth - 40; // 20px padding each side
+         const availWidth = wrapper.offsetWidth - 40; 
          const availHeight = wrapper.offsetHeight - 40; 
-         
          let targetWidth, targetHeight;
-
-         if (deviceMode === 'full') {
-            // Im Full mode nutzen wir einfach 100%, kein scaling nötig.
-            setScaleFactor(1);
-            return;
-         }
-
-         // Device definitions
-         if (deviceMode === 'mobile') {
-            targetWidth = orientation === 'portrait' ? 375 : 667;
-            targetHeight = orientation === 'portrait' ? 667 : 375;
-         } else if (deviceMode === 'tablet') {
-            targetWidth = orientation === 'portrait' ? 768 : 1024;
-            targetHeight = orientation === 'portrait' ? 1024 : 768;
-         } else if (deviceMode === 'desktop') {
-            targetWidth = 1280;
-            targetHeight = 800;
-         }
-
-         // Scale calculation: Fit target into available space
+         if (deviceMode === 'full') { setScaleFactor(1); return; }
+         if (deviceMode === 'mobile') { targetWidth = orientation === 'portrait' ? 375 : 667; targetHeight = orientation === 'portrait' ? 667 : 375; }
+         else if (deviceMode === 'tablet') { targetWidth = orientation === 'portrait' ? 768 : 1024; targetHeight = orientation === 'portrait' ? 1024 : 768; }
+         else if (deviceMode === 'desktop') { targetWidth = 1280; targetHeight = 800; }
          const scaleX = availWidth / targetWidth;
          const scaleY = availHeight / targetHeight;
-         
-         // Wir skalieren nur runter, nie hoch (pixelig)
          const scale = Math.min(1, scaleX, scaleY);
          setScaleFactor(scale);
       };
-
       const observer = new ResizeObserver(calculateScale);
       observer.observe(containerRef.current);
       calculateScale(); 
-
       return () => observer.disconnect();
     }, [deviceMode, orientation, viewMode]);
 
-    const handleReload = () => {
-      setIsPlaying(false);
-      setTimeout(() => setIsPlaying(true), 50);
-    };
+    const handleReload = () => { setIsPlaying(false); setTimeout(() => setIsPlaying(true), 50); };
+    const handleCopy = () => { if (files[activeFile]) { navigator.clipboard.writeText(files[activeFile]); setCopied(true); setTimeout(() => setCopied(false), 2000); } };
+    const handleDownload = async () => { const zip = new JSZip(); Object.entries(files).forEach(([name, content]) => zip.file(name, content)); const blob = await zip.generateAsync({type:"blob"}); const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "vibecode_project.zip"; a.click(); };
 
-    const handleCopy = () => {
-      if (files[activeFile]) {
-        navigator.clipboard.writeText(files[activeFile]);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-      }
-    };
-
-    const handleDownload = async () => {
-      const zip = new JSZip();
-      Object.entries(files).forEach(([name, content]) => zip.file(name, content));
-      const blob = await zip.generateAsync({type:"blob"});
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      a.download = "vibecode_project.zip";
-      a.click();
-    };
-
-    // Helper: Get dimensions for the iframe container
     const getContainerStyle = () => {
         if (deviceMode === 'full') return { width: '100%', height: '100%', border: 'none' };
-
         let width, height;
         if (deviceMode === 'mobile') { width = orientation === 'portrait' ? 375 : 667; height = orientation === 'portrait' ? 667 : 375; }
         else if (deviceMode === 'tablet') { width = orientation === 'portrait' ? 768 : 1024; height = orientation === 'portrait' ? 1024 : 768; }
         else if (deviceMode === 'desktop') { width = 1280; height = 800; }
-
-        return {
-            width: `${width}px`,
-            height: `${height}px`,
-            transform: `scale(${scaleFactor})`,
-            transformOrigin: 'center center',
-            transition: 'all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1)',
-            boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)',
-            borderRadius: deviceMode === 'mobile' ? '24px' : (deviceMode === 'tablet' ? '16px' : '8px'),
-            overflow: 'hidden' // clip iframe corners
-        };
+        return { width: `${width}px`, height: `${height}px`, transform: `scale(${scaleFactor})`, transformOrigin: 'center center', transition: 'all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1)', boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)', borderRadius: deviceMode === 'mobile' ? '24px' : (deviceMode === 'tablet' ? '16px' : '8px'), overflow: 'hidden' };
     };
 
     return html`
       <div className="flex flex-col h-full bg-gray-900">
-        <!-- Toolbar -->
         <div className="h-14 bg-gray-900 border-b border-gray-800 flex items-center justify-between px-4 flex-shrink-0 shadow-sm z-20">
-           
-           <!-- View Toggle -->
            <div className="flex bg-gray-950 p-1 rounded-lg border border-gray-800 mr-4 flex-shrink-0">
              <button onClick=${() => setViewMode('preview')} className=${`flex items-center gap-2 px-3 py-1.5 rounded text-xs font-medium transition ${viewMode === 'preview' ? 'bg-gray-800 text-white shadow-sm' : 'text-gray-500 hover:text-white'}`}><${Icon} name="Eye" size=${14} /> Preview</button>
              <button onClick=${() => setViewMode('code')} className=${`flex items-center gap-2 px-3 py-1.5 rounded text-xs font-medium transition ${viewMode === 'code' ? 'bg-gray-800 text-white shadow-sm' : 'text-gray-500 hover:text-white'}`}><${Icon} name="Code" size=${14} /> Code</button>
            </div>
-
-           <!-- Preview Controls -->
            ${viewMode === 'preview' && html`
               <div className="flex items-center gap-2 px-3 border-l border-r border-gray-800 mx-2 overflow-x-auto no-scrollbar">
-                 
                  <div className="flex bg-gray-950 p-1 rounded-lg border border-gray-800 mr-2 flex-shrink-0">
-                    <button onClick=${() => setDeviceMode('mobile')} className=${`p-1.5 rounded transition ${deviceMode === 'mobile' ? 'bg-gray-800 text-blue-400' : 'text-gray-500 hover:text-gray-300'}`} title="Mobile (375px)">
-                        <${Icon} name="Smartphone" size=${16} />
-                    </button>
-                    <button onClick=${() => setDeviceMode('tablet')} className=${`p-1.5 rounded transition ${deviceMode === 'tablet' ? 'bg-gray-800 text-blue-400' : 'text-gray-500 hover:text-gray-300'}`} title="Tablet (768px)">
-                        <${Icon} name="Tablet" size=${16} />
-                    </button>
-                    <button onClick=${() => setDeviceMode('desktop')} className=${`p-1.5 rounded transition ${deviceMode === 'desktop' ? 'bg-gray-800 text-blue-400' : 'text-gray-500 hover:text-gray-300'}`} title="Desktop (1280px)">
-                        <${Icon} name="Monitor" size=${16} />
-                    </button>
-                     <button onClick=${() => setDeviceMode('full')} className=${`p-1.5 rounded transition ${deviceMode === 'full' ? 'bg-gray-800 text-blue-400' : 'text-gray-500 hover:text-gray-300'}`} title="Full Width">
-                        <div className="w-4 h-4 border-2 border-current rounded-sm"></div>
-                    </button>
+                    <button onClick=${() => setDeviceMode('mobile')} className=${`p-1.5 rounded transition ${deviceMode === 'mobile' ? 'bg-gray-800 text-blue-400' : 'text-gray-500 hover:text-gray-300'}`} title="Mobile (375px)"><${Icon} name="Smartphone" size=${16} /></button>
+                    <button onClick=${() => setDeviceMode('tablet')} className=${`p-1.5 rounded transition ${deviceMode === 'tablet' ? 'bg-gray-800 text-blue-400' : 'text-gray-500 hover:text-gray-300'}`} title="Tablet (768px)"><${Icon} name="Tablet" size=${16} /></button>
+                    <button onClick=${() => setDeviceMode('desktop')} className=${`p-1.5 rounded transition ${deviceMode === 'desktop' ? 'bg-gray-800 text-blue-400' : 'text-gray-500 hover:text-gray-300'}`} title="Desktop (1280px)"><${Icon} name="Monitor" size=${16} /></button>
+                     <button onClick=${() => setDeviceMode('full')} className=${`p-1.5 rounded transition ${deviceMode === 'full' ? 'bg-gray-800 text-blue-400' : 'text-gray-500 hover:text-gray-300'}`} title="Full Width"><div className="w-4 h-4 border-2 border-current rounded-sm"></div></button>
                  </div>
-
-                 ${deviceMode !== 'full' && deviceMode !== 'desktop' && html`
-                    <button onClick=${() => setOrientation(o => o === 'portrait' ? 'landscape' : 'portrait')} className="p-2 text-gray-500 hover:text-white bg-gray-950 hover:bg-gray-800 border border-gray-800 rounded transition mr-2" title="Rotate">
-                        <${Icon} name="Rotate" size=${16} />
-                    </button>
-                 `}
-
+                 ${deviceMode !== 'full' && deviceMode !== 'desktop' && html`<button onClick=${() => setOrientation(o => o === 'portrait' ? 'landscape' : 'portrait')} className="p-2 text-gray-500 hover:text-white bg-gray-950 hover:bg-gray-800 border border-gray-800 rounded transition mr-2" title="Rotate"><${Icon} name="Rotate" size=${16} /></button>`}
                  <div className="w-[1px] h-6 bg-gray-800 mx-2"></div>
-
-                 <button onClick=${() => setIsPlaying(!isPlaying)} className=${`p-2 rounded transition ${isPlaying ? 'text-blue-400 hover:bg-blue-500/10' : 'text-gray-500 hover:text-gray-300'}`} title=${isPlaying ? "Pause" : "Play"}>
-                    <${Icon} name=${isPlaying ? "Pause" : "Play"} size=${18} />
-                 </button>
-                 <button onClick=${handleReload} className="p-2 text-gray-400 hover:text-white hover:bg-gray-800 rounded transition" title="Reload">
-                    <${Icon} name="Refresh" size=${18} />
-                 </button>
-                 
-                 <button 
-                    onClick=${() => setPointMode(v => !v)} 
-                    className=${`flex items-center gap-1 px-2 py-1 rounded text-[10px] uppercase tracking-wide font-semibold transition flex-shrink-0 border ${
-                      pointMode ? 'bg-purple-600/20 text-purple-200 border-purple-500/60' : 'text-gray-500 hover:text-gray-200 border-transparent hover:border-gray-700'
-                    }`}
-                    title="Point & Vibe"
-                 >
-                    <${Icon} name="Target" size=${14} />
-                 </button>
+                 <button onClick=${() => setIsPlaying(!isPlaying)} className=${`p-2 rounded transition ${isPlaying ? 'text-blue-400 hover:bg-blue-500/10' : 'text-gray-500 hover:text-gray-300'}`} title=${isPlaying ? "Pause" : "Play"}><${Icon} name=${isPlaying ? "Pause" : "Play"} size=${18} /></button>
+                 <button onClick=${handleReload} className="p-2 text-gray-400 hover:text-white hover:bg-gray-800 rounded transition" title="Reload"><${Icon} name="Refresh" size=${18} /></button>
+                 <button onClick=${() => setPointMode(v => !v)} className=${`flex items-center gap-1 px-2 py-1 rounded text-[10px] uppercase tracking-wide font-semibold transition flex-shrink-0 border ${pointMode ? 'bg-purple-600/20 text-purple-200 border-purple-500/60' : 'text-gray-500 hover:text-gray-200 border-transparent hover:border-gray-700'}`} title="Point & Vibe"><${Icon} name="Target" size=${14} /></button>
               </div>
            `}
-
             <div className="flex-1"></div>
-
-           <!-- Actions -->
            <div className="flex items-center gap-2 pl-2 flex-shrink-0">
-             <button onClick=${onOpenHistory} className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium bg-gray-800 hover:bg-gray-700 text-gray-300 rounded border border-gray-700 transition" title="History">
-                <${Icon} name="Clock" size=${14} /> <span className="hidden lg:inline">History</span>
-             </button>
+             <button onClick=${() => onOpenLogs && onOpenLogs()} className="p-2 text-gray-400 hover:text-white hover:bg-gray-800 rounded transition" title="Logs"><${Icon} name="Terminal" size=${16} /></button>
+             <button onClick=${onOpenHistory} className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium bg-gray-800 hover:bg-gray-700 text-gray-300 rounded border border-gray-700 transition" title="History"><${Icon} name="Clock" size=${14} /> <span className="hidden lg:inline">History</span></button>
              <div className="w-[1px] h-6 bg-gray-800 mx-1"></div>
-             <button onClick=${handleCopy} className="p-2 text-gray-400 hover:text-white hover:bg-gray-800 rounded transition" title="Copy Code">
-                <${Icon} name="Copy" size=${16} className=${copied ? "text-green-500" : ""} />
-             </button>
-             <button onClick=${handleDownload} className="p-2 text-gray-400 hover:text-white hover:bg-gray-800 rounded transition" title="Download Zip">
-                <${Icon} name="Download" size=${16} />
-             </button>
+             <button onClick=${handleCopy} className="p-2 text-gray-400 hover:text-white hover:bg-gray-800 rounded transition" title="Copy Code"><${Icon} name="Copy" size=${16} className=${copied ? "text-green-500" : ""} /></button>
+             <button onClick=${handleDownload} className="p-2 text-gray-400 hover:text-white hover:bg-gray-800 rounded transition" title="Download Zip"><${Icon} name="Download" size=${16} /></button>
            </div>
         </div>
-
-        <!-- Content Area -->
         <div className="flex-1 relative bg-[#0f0f12] overflow-hidden flex items-center justify-center" ref=${containerRef}>
            ${Object.keys(files).length === 0 ? html`
               <div className="flex flex-col items-center justify-center h-full text-gray-600">
                  <div className="w-16 h-16 rounded-full bg-gray-800 flex items-center justify-center mb-4"><${Icon} name="Code" size=${32} /></div>
                  <p>Ready to build.</p>
-              </div>
-           ` : viewMode === 'preview' ? html`
+              </div>`
+            : viewMode === 'preview' ? html`
               <div className="relative w-full h-full flex items-center justify-center bg-gray-800/50 overflow-hidden">
-                  ${pointMode && html`
-                    <div className="pointer-events-none absolute top-4 right-4 z-30 bg-purple-950/90 text-[11px] text-purple-50 px-3 py-1.5 rounded-full border border-purple-500/70 shadow-lg flex items-center gap-2">
-                       <${Icon} name="Target" size=${14} />
-                       <span>Point & Vibe aktiv</span>
-                    </div>
-                  `}
-                  
-                  <!-- Device Wrapper -->
+                  ${pointMode && html`<div className="pointer-events-none absolute top-4 right-4 z-30 bg-purple-950/90 text-[11px] text-purple-50 px-3 py-1.5 rounded-full border border-purple-500/70 shadow-lg flex items-center gap-2"><${Icon} name="Target" size=${14} /><span>Point & Vibe aktiv</span></div>`}
                   <div style=${getContainerStyle()}>
-                    ${isPlaying && iframeUrl ? html`
-                        <iframe key=${iframeUrl} ref=${iframeRef} src=${iframeUrl} className="w-full h-full border-none bg-white" sandbox="allow-scripts allow-modals allow-forms allow-same-origin allow-popups"></iframe>
-                    ` : html`
-                        <div className="w-full h-full flex items-center justify-center bg-gray-900 text-gray-500 flex-col border border-gray-700">
-                             <div className="p-6 rounded-full bg-gray-800 mb-4"><${Icon} name="Pause" size=${48} /></div>
-                             <p className="text-lg font-medium">Preview Paused</p>
-                        </div>
-                    `}
+                    ${isPlaying && iframeUrl ? html`<iframe key=${iframeUrl} ref=${iframeRef} src=${iframeUrl} className="w-full h-full border-none bg-white" sandbox="allow-scripts allow-modals allow-forms allow-same-origin allow-popups"></iframe>`
+                     : html`<div className="w-full h-full flex items-center justify-center bg-gray-900 text-gray-500 flex-col border border-gray-700"><div className="p-6 rounded-full bg-gray-800 mb-4"><${Icon} name="Pause" size=${48} /></div><p className="text-lg font-medium">Preview Paused</p></div>`}
                   </div>
-                  
-                  ${deviceMode !== 'full' && html`
-                      <div className="absolute bottom-4 px-3 py-1 bg-gray-900/80 text-[10px] text-gray-400 rounded-full backdrop-blur border border-gray-800">
-                         ${Math.round(scaleFactor * 100)}% Scale
-                      </div>
-                  `}
-              </div>
-           ` : html`
+                  ${deviceMode !== 'full' && html`<div className="absolute bottom-4 px-3 py-1 bg-gray-900/80 text-[10px] text-gray-400 rounded-full backdrop-blur border border-gray-800">${Math.round(scaleFactor * 100)}% Scale</div>`}
+              </div>`
+            : html`
               <div className="flex w-full h-full">
                  <div className="flex-1">
-                    <textarea 
-                       value=${files[activeFile] || ''} 
-                       onInput=${e => onFileChange(activeFile, e.target.value)} 
-                       className="w-full h-full bg-[#0f0f12] text-gray-300 p-6 font-mono text-sm outline-none resize-none custom-scrollbar leading-relaxed" 
-                       spellCheck="false" 
-                    />
+                    <textarea value=${files[activeFile] || ''} onInput=${e => onFileChange(activeFile, e.target.value)} className="w-full h-full bg-[#0f0f12] text-gray-300 p-6 font-mono text-sm outline-none resize-none custom-scrollbar leading-relaxed" spellCheck="false" />
                  </div>
                  <div className="w-64 border-l border-gray-800 bg-gray-950 flex-shrink-0 flex flex-col">
-                    <div className="px-3 py-2 text-[11px] uppercase tracking-wide text-gray-500 border-b border-gray-800 flex items-center justify-between">
-                       <span>Dateien</span>
-                       <span className="text-gray-600 text-[10px]">Projekt</span>
-                    </div>
-                    <div className="flex-1 overflow-y-auto custom-scrollbar py-1">
-                       ${renderTree(fileTree)}
-                    </div>
+                    <div className="px-3 py-2 text-[11px] uppercase tracking-wide text-gray-500 border-b border-gray-800 flex items-center justify-between"><span>Dateien</span><span className="text-gray-600 text-[10px]">Projekt</span></div>
+                    <div className="flex-1 overflow-y-auto custom-scrollbar py-1">${renderTree(fileTree)}</div>
                  </div>
-              </div>
-           `}
+              </div>`
+           }
         </div>
       </div>
     `;
   };
 
-  // --- SETTINGS MODAL ---
   const SettingsModal = ({ isOpen, onClose, settings, onSave, systemPromptPreview }) => {
     const [local, setLocal] = useState(settings);
     const [models, setModels] = useState([]);
-    
-    const fetchModels = async () => {
-      const m = await window.VC.Utils.fetchModels(local.apiUrl);
-      setModels(m);
-      if(m.length && !local.model) setLocal({...local, model: m[0].id});
-    };
-
+    const fetchModels = async () => { const m = await window.VC.Utils.fetchModels(local.apiUrl); setModels(m); if(m.length && !local.model) setLocal({...local, model: m[0].id}); };
     if (!isOpen) return null;
+
+    const isCustomTemp = local.temperature !== null;
 
     return html`
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
         <div className="bg-gray-900 border border-gray-800 rounded-xl w-[600px] max-w-[95%] h-[90vh] shadow-2xl overflow-hidden flex flex-col">
           <div className="h-1 bg-gradient-to-r from-purple-600 to-blue-600 flex-shrink-0"></div>
-          
           <div className="p-6 flex-1 overflow-y-auto custom-scrollbar">
-            <div className="flex justify-between mb-6">
-              <h2 className="text-xl font-bold text-white flex items-center gap-2"><${Icon} name="Settings" /> Settings</h2>
-              <button onClick=${onClose} className="text-gray-400 hover:text-white">✕</button>
-            </div>
-            
+            <div className="flex justify-between mb-6"><h2 className="text-xl font-bold text-white flex items-center gap-2"><${Icon} name="Settings" /> Settings</h2><button onClick=${onClose} className="text-gray-400 hover:text-white">✕</button></div>
             <div className="space-y-8">
-               <!-- Connection Settings -->
+               <div className="space-y-4"><h3 className="text-sm font-bold text-gray-400 uppercase border-b border-gray-800 pb-2">Connection</h3><div><label className="text-xs text-gray-500 uppercase block mb-1">API URL</label><input value=${local.apiUrl} onInput=${e => setLocal({...local, apiUrl: e.target.value})} className="w-full bg-gray-950 border border-gray-800 rounded p-2 text-gray-300 outline-none focus:border-purple-500" /></div><div><label className="text-xs text-gray-500 uppercase block mb-1 flex justify-between"><span>Model</span> <button onClick=${fetchModels} className="text-blue-500 hover:underline">Refresh</button></label>${models.length ? html`<select value=${local.model} onChange=${e => setLocal({...local, model: e.target.value})} className="w-full bg-gray-950 border border-gray-800 rounded p-2 text-gray-300 outline-none">${models.map(m => html`<option value=${m.id}>${m.id}</option>`)}</select>` : html`<input value=${local.model} onInput=${e => setLocal({...local, model: e.target.value})} className="w-full bg-gray-950 border border-gray-800 rounded p-2 text-gray-300" />`}</div></div>
+               
                <div className="space-y-4">
-                 <h3 className="text-sm font-bold text-gray-400 uppercase border-b border-gray-800 pb-2">Connection</h3>
-                 <div>
-                   <label className="text-xs text-gray-500 uppercase block mb-1">API URL</label>
-                   <input value=${local.apiUrl} onInput=${e => setLocal({...local, apiUrl: e.target.value})} className="w-full bg-gray-950 border border-gray-800 rounded p-2 text-gray-300 outline-none focus:border-purple-500" />
-                 </div>
-                 <div>
-                   <label className="text-xs text-gray-500 uppercase block mb-1 flex justify-between"><span>Model</span> <button onClick=${fetchModels} className="text-blue-500 hover:underline">Refresh</button></label>
-                   ${models.length ? 
-                     html`<select value=${local.model} onChange=${e => setLocal({...local, model: e.target.value})} className="w-full bg-gray-950 border border-gray-800 rounded p-2 text-gray-300 outline-none">
-                       ${models.map(m => html`<option value=${m.id}>${m.id}</option>`)}
-                     </select>` :
-                     html`<input value=${local.model} onInput=${e => setLocal({...local, model: e.target.value})} className="w-full bg-gray-950 border border-gray-800 rounded p-2 text-gray-300" />`
-                   }
-                 </div>
-               </div>
-
-               <!-- Generation Parameters -->
-               <div className="space-y-4">
-                 <h3 className="text-sm font-bold text-gray-400 uppercase border-b border-gray-800 pb-2">Generation Parameters</h3>
-                 
-                 <div>
-                    <div className="flex justify-between mb-1">
-                        <label className="text-xs text-gray-500 uppercase">Temperature</label>
-                        <span className="text-xs text-gray-300 font-mono">${local.temperature}</span>
+                  <h3 className="text-sm font-bold text-gray-400 uppercase border-b border-gray-800 pb-2">Generation Parameters</h3>
+                  <div>
+                    <div className="flex justify-between mb-2 items-center">
+                       <label className="text-xs text-gray-500 uppercase">Temperature</label>
+                       <div className="flex items-center gap-2">
+                          <label className="text-xs text-gray-400 cursor-pointer select-none">
+                             <input type="checkbox" className="mr-1" checked=${!isCustomTemp} onChange=${() => setLocal({...local, temperature: isCustomTemp ? null : 0.7})} />
+                             Use Model Default
+                          </label>
+                          ${isCustomTemp && html`<span className="text-xs text-gray-300 font-mono bg-gray-800 px-1 rounded">${local.temperature}</span>`}
+                       </div>
                     </div>
-                    <input 
-                        type="range" min="0" max="2" step="0.1" 
-                        value=${local.temperature} 
-                        onChange=${e => setLocal({...local, temperature: parseFloat(e.target.value)})} 
-                        className="w-full h-2 bg-gray-800 rounded-lg appearance-none cursor-pointer"
-                    />
-                 </div>
-
-                 <div>
-                    <div className="flex justify-between mb-1">
-                        <label className="text-xs text-gray-500 uppercase">Context Window (Max Tokens)</label>
-                        <span className="text-xs text-gray-300 font-mono">${local.maxTokens}</span>
-                    </div>
-                    <input 
-                        type="number" step="1024"
-                        value=${local.maxTokens} 
-                        onChange=${e => setLocal({...local, maxTokens: parseInt(e.target.value)})} 
-                        className="w-full bg-gray-950 border border-gray-800 rounded p-2 text-gray-300 outline-none focus:border-purple-500"
-                    />
-                 </div>
+                    ${isCustomTemp && html`
+                       <input type="range" min="0" max="2" step="0.1" value=${local.temperature} onChange=${e => setLocal({...local, temperature: parseFloat(e.target.value)})} className="w-full h-2 bg-gray-800 rounded-lg appearance-none cursor-pointer" />
+                    `}
+                    ${!isCustomTemp && html`
+                       <div className="w-full h-8 bg-gray-800/50 rounded flex items-center justify-center text-xs text-gray-500 italic">
+                          Model default temperature will be used
+                       </div>
+                    `}
+                  </div>
                </div>
 
-               <!-- Logic Settings -->
-               <div className="space-y-4">
-                 <h3 className="text-sm font-bold text-gray-400 uppercase border-b border-gray-800 pb-2">Logic & Output</h3>
-                 
-                 <div className="p-3 bg-gray-950 rounded border border-gray-800">
-                   <label className="text-xs text-gray-500 uppercase block mb-2">Edit Strategy</label>
-                   <div className="flex flex-col gap-2">
-                     <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
-                       <input type="radio" name="mode" checked=${local.mode === 'auto'} onChange=${() => setLocal({...local, mode: 'auto'})} />
-                       Auto (Recommended)
-                     </label>
-                     <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
-                       <input type="radio" name="mode" checked=${local.mode === 'rewrite'} onChange=${() => setLocal({...local, mode: 'rewrite'})} />
-                       Force Full Rewrites
-                     </label>
-                     <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
-                       <input type="radio" name="mode" checked=${local.mode === 'patch'} onChange=${() => setLocal({...local, mode: 'patch'})} />
-                       Force Patching
-                     </label>
-                   </div>
-                 </div>
-
-                 <div>
-                    <label className="text-xs text-gray-500 uppercase block mb-1">System Prompt (Read-Only)</label>
-                    <textarea 
-                      readOnly 
-                      value=${systemPromptPreview || ''} 
-                      className="w-full bg-gray-950 border border-gray-800 rounded p-2 text-xs font-mono text-gray-500 outline-none resize-y h-32"
-                    />
-                 </div>
-               </div>
+               <div className="space-y-4"><h3 className="text-sm font-bold text-gray-400 uppercase border-b border-gray-800 pb-2">Logic & Output</h3><div className="p-3 bg-gray-950 rounded border border-gray-800"><label className="text-xs text-gray-500 uppercase block mb-2">Edit Strategy</label><div className="flex flex-col gap-2"><label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer"><input type="radio" name="mode" checked=${local.mode === 'auto'} onChange=${() => setLocal({...local, mode: 'auto'})} /> Auto (Recommended)</label><label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer"><input type="radio" name="mode" checked=${local.mode === 'rewrite'} onChange=${() => setLocal({...local, mode: 'rewrite'})} /> Force Full Rewrites</label><label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer"><input type="radio" name="mode" checked=${local.mode === 'patch'} onChange=${() => setLocal({...local, mode: 'patch'})} /> Force Patching</label></div></div><div><label className="text-xs text-gray-500 uppercase block mb-1">System Prompt (Read-Only)</label><textarea readOnly value=${systemPromptPreview || ''} className="w-full bg-gray-950 border border-gray-800 rounded p-2 text-xs font-mono text-gray-500 outline-none resize-y h-32" /></div></div>
             </div>
           </div>
-          
-          <div className="p-4 border-t border-gray-800 bg-gray-900 flex-shrink-0">
-             <button onClick=${() => { onSave(local); onClose(); }} className="w-full bg-purple-600 hover:bg-purple-500 text-white py-3 rounded font-medium shadow-lg shadow-purple-900/20">Save Configuration</button>
-          </div>
+          <div className="p-4 border-t border-gray-800 bg-gray-900 flex-shrink-0"><button onClick=${() => { onSave(local); onClose(); }} className="w-full bg-purple-600 hover:bg-purple-500 text-white py-3 rounded font-medium shadow-lg shadow-purple-900/20">Save Configuration</button></div>
         </div>
       </div>
     `;
   };
 
-  // --- HISTORY MODAL ---
   const HistoryModal = ({ isOpen, onClose, history, currentVersionIndex, onRestore }) => {
     if (!isOpen) return null;
-
     return html`
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
          <div className="bg-gray-900 border border-gray-800 rounded-xl w-[600px] max-w-[95%] h-[80vh] shadow-2xl overflow-hidden flex flex-col">
-            <div className="p-4 border-b border-gray-800 flex justify-between items-center">
-               <h3 className="font-bold text-white flex items-center gap-2"><${Icon} name="Clock" /> Version History</h3>
-               <button onClick=${onClose}><${Icon} name="Close" /></button>
-            </div>
+            <div className="p-4 border-b border-gray-800 flex justify-between items-center"><h3 className="font-bold text-white flex items-center gap-2"><${Icon} name="Clock" /> Version History</h3><button onClick=${onClose}><${Icon} name="Close" /></button></div>
             <div className="flex-1 overflow-y-auto custom-scrollbar p-4 space-y-3">
                ${history.length === 0 && html`<div className="text-center text-gray-500 py-10">No history yet. Make some changes!</div>`}
                ${history.slice().reverse().map((entry, revIndex) => {
                    const realIndex = history.length - 1 - revIndex;
                    const isCurrent = realIndex === currentVersionIndex;
-                   return html`
-                      <div key=${realIndex} className=${`p-4 rounded-lg border transition relative ${isCurrent ? 'bg-purple-900/20 border-purple-500/50' : 'bg-gray-950 border-gray-800 hover:border-gray-600'}`}>
-                         <div className="flex justify-between items-start mb-2">
-                            <div>
-                               <span className="text-xs font-mono text-gray-500">#${realIndex + 1}</span>
-                               <span className="text-xs text-gray-400 ml-2">${new Date(entry.timestamp).toLocaleTimeString()}</span>
-                            </div>
-                            ${!isCurrent && html`
-                                <button onClick=${() => { onRestore(realIndex); onClose(); }} className="text-xs bg-gray-800 hover:bg-gray-700 text-gray-200 px-2 py-1 rounded border border-gray-700 flex items-center gap-1">
-                                   <${Icon} name="Undo" size=${12} /> Restore
-                                </button>
-                            `}
-                            ${isCurrent && html`<span className="text-[10px] bg-purple-500 text-white px-2 py-0.5 rounded-full font-bold">CURRENT</span>`}
-                         </div>
-                         <div className="text-sm text-gray-300 font-medium line-clamp-2">"${entry.prompt || 'Initial State'}"</div>
-                         <div className="text-xs text-gray-500 mt-1">${Object.keys(entry.files).length} files</div>
-                      </div>
-                   `;
+                   return html`<div key=${realIndex} className=${`p-4 rounded-lg border transition relative ${isCurrent ? 'bg-purple-900/20 border-purple-500/50' : 'bg-gray-950 border-gray-800 hover:border-gray-600'}`}><div className="flex justify-between items-start mb-2"><div><span className="text-xs font-mono text-gray-500">#${realIndex + 1}</span><span className="text-xs text-gray-400 ml-2">${new Date(entry.timestamp).toLocaleTimeString()}</span></div>${!isCurrent && html`<button onClick=${() => { onRestore(realIndex); onClose(); }} className="text-xs bg-gray-800 hover:bg-gray-700 text-gray-200 px-2 py-1 rounded border border-gray-700 flex items-center gap-1"><${Icon} name="Undo" size=${12} /> Restore</button>`}${isCurrent && html`<span className="text-[10px] bg-purple-500 text-white px-2 py-0.5 rounded-full font-bold">CURRENT</span>`}</div><div className="text-sm text-gray-300 font-medium line-clamp-2">"${entry.prompt || 'Initial State'}"</div><div className="text-xs text-gray-500 mt-1">${Object.keys(entry.files).length} files</div></div>`;
                })}
             </div>
          </div>
@@ -614,5 +481,5 @@
   };
 
   window.VC = window.VC || {};
-  window.VC.Components = { Styles, Icon, SettingsModal, StatusBar, CodePreview, HistoryModal };
+  window.VC.Components = { Styles, Icon, SettingsModal, StatusBar, ChatMessage, StreamDock, LogDock, LogsModal, CodePreview, HistoryModal };
 })();

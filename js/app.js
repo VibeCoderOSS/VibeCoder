@@ -1,7 +1,15 @@
 (function() {
   const html = htm.bind(React.createElement);
   const { useState, useEffect, useRef, useCallback } = React;
-  const { Styles, Icon, SettingsModal, StatusBar, CodePreview, HistoryModal } = window.VC.Components;
+  
+  if (!window.VC || !window.VC.Utils || !window.VC.Components) {
+     const msg = "Initialization Failed: Missing dependencies (VC.Utils or VC.Components). Please check console for script errors.";
+     console.error(msg);
+     document.body.innerHTML = `<div style="color:#ef4444;padding:2rem;font-family:sans-serif;background:#0f0f12;height:100vh;"><h1>Fatal Error</h1><p>${msg}</p></div>`;
+     return;
+  }
+
+  const { Styles, Icon, SettingsModal, StatusBar, ChatMessage, LogsModal, CodePreview, HistoryModal } = window.VC.Components;
   const Utils = window.VC.Utils;
 
   // --- DEFAULT TEMPLATE FOR VIRTUAL MODE ---
@@ -70,17 +78,12 @@ button:active { transform: translateY(1px); }`,
     'script.js': `document.getElementById('btn').addEventListener('click', () => {
   const btn = document.getElementById('btn');
   btn.textContent = 'Vibe Checked ✅';
-  confetti({
-    particleCount: 100,
-    spread: 70,
-    origin: { y: 0.6 }
-  });
-});
-
-// Simple confetti polyfill or placeholder if not present
-if (typeof confetti === 'undefined') {
-  window.confetti = () => alert('Vibe Checked! ✅ (Imagine confetti here)');
-}`
+  if (typeof confetti !== 'undefined') {
+    confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
+  } else {
+    alert('Vibe Checked! ✅');
+  }
+});`
   };
 
   // --- SETUP SCREEN ---
@@ -91,22 +94,17 @@ if (typeof confetti === 'undefined') {
     useEffect(() => {
         Utils.fetchModels(local.apiUrl).then(m => {
             setModels(m);
-
             if (m.length) {
                 setLocal(prev => {
                     const ids = m.map(mod => mod.id);
-
-                    // Falls noch kein Modell gesetzt ist oder der Platzhalter nicht existiert:
                     if (!prev.model || !ids.includes(prev.model)) {
                         return { ...prev, model: m[0].id };
                     }
-
                     return prev;
                 });
             }
         });
     }, [local.apiUrl]);
-
 
     return html`
       <div className="fixed inset-0 flex items-center justify-center bg-gray-950 text-white z-50">
@@ -142,659 +140,611 @@ if (typeof confetti === 'undefined') {
 
   // --- MAIN APP ---
   const App = () => {
+    const makeId = () => `${Date.now().toString(36)}-${Math.random().toString(16).slice(2)}`;
     const [settings, setSettings] = useState({
       apiUrl: 'http://localhost:1234/v1',
       model: 'local-model',
-      mode: 'auto', // auto | rewrite | patch
-      temperature: 0.7,
-      maxTokens: 32000
+      mode: 'auto', 
+      temperature: null, // Default to null (Use Model Default)
     });
 
     const [setupDone, setSetupDone] = useState(false);
     const [dirHandle, setDirHandle] = useState(null);
     const [files, setFiles] = useState({});
-    const [messages, setMessages] = useState([{ role: 'assistant', content: 'Ready to vibe. What are we building?' }]);
+    const [messages, setMessages] = useState([{ id: makeId(), role: 'assistant', content: 'Ready to vibe. What are we building?', output: 'Ready to vibe. What are we building?', thinking: '', isStreaming: false }]);
     const [input, setInput] = useState('');
-    const [attachments, setAttachments] = useState([]); // { name, data, path, saveToProject: boolean }
+    const [attachments, setAttachments] = useState([]); 
     
-    // Detailed Status State
-    const [appStatus, setAppStatus] = useState('idle'); // idle, reading, thinking, generating, patching
+    const [appStatus, setAppStatus] = useState('idle');
     const [statusMsg, setStatusMsg] = useState('');
     const [viewMode, setViewMode] = useState('preview');
     const [showSettings, setShowSettings] = useState(false);
     const [showHistory, setShowHistory] = useState(false);
+    const [showLogs, setShowLogs] = useState(false);
+
+    const [logs, setLogs] = useState([]);
     
-    const [streamText, setStreamText] = useState('');
+    // Session Logging
+    const [sessionLogText, setSessionLogText] = useState('');
+    const [sessionLogFileName, setSessionLogFileName] = useState('');
+    const sessionLogRef = useRef('');
+    const sessionLogFileHandleRef = useRef(null);
+    const sessionLogWriteChainRef = useRef(Promise.resolve());
+    const sessionLogUiFlushRef = useRef(null);
+
+    const appendSessionLog = useCallback((tag, payload, level = 'INFO') => {
+        const ts = new Date().toISOString();
+        let body = '';
+        try {
+            if (payload == null) body = '';
+            else if (typeof payload === 'string') body = payload;
+            else body = JSON.stringify(payload, null, 2);
+        } catch (e) {
+            body = String(payload);
+        }
+
+        const entry = `\n\n===== ${ts} [${String(level).toUpperCase()}] ${String(tag || 'event')} =====\n${body}\n`;
+        sessionLogRef.current += entry;
+
+        if (!sessionLogUiFlushRef.current) {
+            sessionLogUiFlushRef.current = setTimeout(() => {
+                setSessionLogText(sessionLogRef.current);
+                sessionLogUiFlushRef.current = null;
+            }, 150);
+        }
+
+        const fh = sessionLogFileHandleRef.current;
+        if (fh) {
+            sessionLogWriteChainRef.current = sessionLogWriteChainRef.current
+              .then(() => Utils.appendToFileHandle(fh, entry))
+              .catch(() => {});
+        }
+    }, [Utils]);
+
+    const log = useCallback((level, message, data = null) => {
+        const entry = {
+            ts: Date.now(),
+            level: (level || 'info').toLowerCase(),
+            message: String(message || ''),
+            data
+        };
+        setLogs(prev => {
+            const next = [...prev, entry];
+            return next.slice(-500);
+        });
+    }, []);
+
+    const copyLogs = useCallback(async () => {
+        try {
+            const lines = (logs || []).map(l => `[${new Date(l.ts || Date.now()).toISOString()}] ${l.level.toUpperCase()}: ${l.message}`);
+            await navigator.clipboard.writeText(lines.join('\n'));
+            log('info', 'Logs copied to clipboard');
+        } catch (e) {
+            log('error', 'Failed to copy logs', { error: String(e) });
+        }
+    }, [logs]);
+
+    const copySessionLog = useCallback(async () => {
+      try {
+        await navigator.clipboard.writeText(sessionLogRef.current || '');
+        log('info', 'Session log copied to clipboard');
+      } catch (e) {
+        log('error', 'Failed to copy session log', { error: String(e) });
+      }
+    }, [log]);
+
+    const downloadSessionLog = useCallback(() => {
+      try {
+        const name = sessionLogFileName || `vibecode_session_log_${new Date().toISOString().replace(/[:.]/g,'-')}.txt`;
+        Utils.downloadText(name, sessionLogRef.current || '');
+        log('info', 'Session log download started');
+      } catch (e) {
+        log('error', 'Failed to download session log', { error: String(e) });
+      }
+    }, [Utils, sessionLogFileName, log]);
+
+
     const [runtimeError, setRuntimeError] = useState(null);
     const [activeFile, setActiveFile] = useState('index.html');
     const [pointEvents, setPointEvents] = useState([]); 
 
-    // Version History & Modification Tracking
-    const [history, setHistory] = useState([]); // Array of { files, timestamp, prompt }
-    const [currentVersionIndex, setCurrentVersionIndex] = useState(-1); // -1 means latest (working copy)
+    const [history, setHistory] = useState([]); 
+    const [currentVersionIndex, setCurrentVersionIndex] = useState(-1);
     const [modifiedFiles, setModifiedFiles] = useState([]);
     const [showScrollButton, setShowScrollButton] = useState(false);
 
     const msgsEndRef = useRef(null);
     const chatContainerRef = useRef(null);
-    // Track if user is at bottom using a Ref to avoid closure staleness and layout thrashing issues
     const isAtBottomRef = useRef(true);
     
     const abortControllerRef = useRef(null);
+    const activeAssistantMsgIdRef = useRef(null);
     
-    // Refs for safe async operations
     const filesRef = useRef(files);
     const dirHandleRef = useRef(dirHandle);
 
     useEffect(() => { filesRef.current = files; }, [files]);
     useEffect(() => { dirHandleRef.current = dirHandle; }, [dirHandle]);
 
-    // --- SMART AUTO-SCROLLING ---
-    
-    // 1. Always scroll to bottom when a new message is added or status changes
+    // Scroll Logic
     useEffect(() => { 
-        // Force bottom stickiness on new message start
         isAtBottomRef.current = true;
         msgsEndRef.current?.scrollIntoView({ behavior: 'smooth' }); 
     }, [messages.length, appStatus]);
 
-    // 2. Only scroll during streaming if the user WAS at the bottom before the update
     useEffect(() => {
         if (isAtBottomRef.current) {
-             // Use 'auto' instead of 'smooth' during streaming to prevent "fighting" the user's scroll
-             msgsEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
+            msgsEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
         }
-    }, [streamText]);
+    }, [messages]);
 
-    // 3. Track scroll position during scrolling
     const handleChatScroll = () => {
         const container = chatContainerRef.current;
         if (!container) return;
         const { scrollHeight, scrollTop, clientHeight } = container;
-        const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
-        
-        // Update sticky state based on current position
-        // Tolerance of 40px allows for minor pixel differences
-        const isNearBottom = distanceFromBottom < 40;
+        const isNearBottom = (scrollHeight - scrollTop - clientHeight) < 40;
         isAtBottomRef.current = isNearBottom;
-
         setShowScrollButton(!isNearBottom);
     };
     
-    // Handle iframe runtime errors und Point Events
+    // Preview Error Handling
     useEffect(() => {
         const handler = (e) => { 
             if (e.data?.type === 'iframe-error') {
                 console.error("Preview Error:", e.data.message);
                 setRuntimeError(e.data.message); 
+                appendSessionLog('preview.iframe_error', { message: e.data.message }).catch(() => {});
             }
             if (e.data?.type === 'iframe-point') {
                 setPointEvents(prev => {
-                    const next = [
-                      ...prev,
-                      {
-                        tag: e.data.tag,
-                        text: e.data.text,
-                        classes: e.data.classes,
-                        id: e.data.id,
-                        rect: e.data.rect
-                      }
-                    ];
+                    const next = [...prev, { tag: e.data.tag, text: e.data.text, classes: e.data.classes, id: e.data.id, rect: e.data.rect }];
                     return next.slice(-6);
                 });
+                appendSessionLog('preview.point', e.data).catch(() => {});
             }
         };
         window.addEventListener('message', handler);
         return () => window.removeEventListener('message', handler);
-    }, []);
+    }, [appendSessionLog]);
 
-    // --- ROBUST DEBOUNCED AUTO-SAVE ---
+    // Auto-Save
     const saveTimerRef = useRef(null);
-
     useEffect(() => {
         if (!dirHandle) return;
-        
         if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-
         saveTimerRef.current = setTimeout(() => {
             const currentFiles = filesRef.current;
             const currentHandle = dirHandleRef.current;
-            
             if (Object.keys(currentFiles).length > 0 && currentHandle) {
-                Utils.saveFiles(currentHandle, currentFiles);
+                appendSessionLog('autosave.start', { fileCount: Object.keys(currentFiles).length });
+                Utils.saveFiles(currentHandle, currentFiles)
+                  .then(() => appendSessionLog('autosave.success', { ok: true }))
+                  .catch((err) => appendSessionLog('autosave.error', { message: err?.message || String(err) }));
             }
         }, 1000);
-
-        return () => {
-            if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-        };
-    }, [files, dirHandle]);
-
+        return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
+    }, [files, dirHandle, appendSessionLog]);
 
     useEffect(() => {
         if (!files[activeFile] && Object.keys(files).length) setActiveFile(Object.keys(files)[0]);
     }, [files, activeFile]);
 
-    const getSystemPrompt = () => `
-You are VibeCoder, an expert frontend engineer.
-You generate strictly valid HTML/JS/CSS. No .tsx, no .ts, no Markdown explanations outside of comments.
+    // --- HARDENED SYSTEM PROMPT ---
+    const getSystemPrompt = (isRetry = false) => {
+        let base = `You are VibeCoder, an expert frontend engineer.
+You generate strictly valid HTML/CSS/JS.
 
-ARCHITECTURE:
-- Entry point: index.html
-- PREFER separating logic into 'script.js' and styles into 'styles.css' (or 'app.js'/'app.css') for clean architecture.
-- Do NOT dump complex logic into index.html unless it is a very simple single-file prototype.
-- Use standard ES6 Modules (<script type="module">) if beneficial.
+HIGH-LEVEL GOAL:
+Output a browser-based web app (index.html, script.js, styles.css).
+Entry point is index.html.
 
-CURRENT MODE: ${settings.mode.toUpperCase()}
-${settings.mode === 'rewrite' ? 'ALWAYS REWRITE FULL FILES.' : 
-  settings.mode === 'patch' ? 'ALWAYS USE PATCHES FOR EXISTING FILES.' : 
-  'DECIDE: Use PATCH for small changes (<20 lines). Use FULL FILE for new files or complex refactors.'}
-
-ASSETS & IMAGES:
-- If the user attaches images, they are ALREADY SAVED in the file system.
-- Look for "AVAILABLE ASSETS" in the user message.
-- Use the provided paths (e.g., "assets/image.png") directly in your code: <img src="assets/image.png">.
-- Do NOT use placeholders like "https://via.placeholder.com" if an asset is provided.
+OUTPUT INSTRUCTIONS:
+1. BE CONCISE. Do not waste tokens on long explanations.
+2. Use strict file markers for all code.
+3. You may use a <thinking> block to plan. Close it immediately before writing code.
+4. Do NOT create variant files (e.g., script2.js). Update existing files.
 
 OUTPUT FORMATS:
-
-1. <thinking>...</thinking>
-   (Explain your plan. Decide between PATCH or REWRITE.)
+1. <thinking>...</thinking> (Optional)
 
 2. <!-- filename: path/to/file.ext -->
-   (Followed by full file content. Use this for NEW files or REWRITES.)
+   (Full file content)
 
 3. <!-- patch: path/to/file.ext -->
    <<<<
-   (Exact code block to replace - must match file content character-by-character including whitespace)
+   (Original code block - MUST match existing code exactly, whitespace matters!)
    ====
    (New code block)
    >>>>
 
-RULES:
-- Do not use \`npm\` or \`import\` from node_modules. Use CDNs (React, Tailwind) if requested.
-- For patches, the '<<<<' block must be UNIQUE in the file. Include 2-3 lines of context.
-- If you are unsure about the context for a patch, REWRITE the file.
+   PATCHING RULES:
+   - Provide 3-4 lines of UNCHANGED context around your changes in the <<<< block.
+   - If a function has a logic error, rewrite the ENTIRE function in the patch. Do not try to patch single lines inside a complex function.
+   - If the patch fails, the system will warn you.
 `;
-
+        if (isRetry) {
+             base += `\n\nCRITICAL RETRY INSTRUCTION:
+Your previous output was invalid (detected Python or unstructured text).
+You MUST output a browser web app (index.html, styles.css, script.js) with strict file markers.
+NO PYTHON. NO MARKDOWN FENCES.`;
+        }
+        return base;
+    };
 
     const handleFileSelect = async (e) => {
         const selected = Array.from(e.target.files);
         if (!selected.length) return;
-
         const newAttachments = await Promise.all(selected.map(async f => {
-            // Auto suggest assets/ folder for images
             const isImage = f.type.startsWith('image/');
-            const defaultPath = isImage ? `assets/${f.name}` : f.name;
-
             return {
                 name: f.name,
                 type: f.type,
                 data: await Utils.readAsDataURL(f),
-                path: defaultPath, 
-                saveToProject: true // Default to saving files
+                path: isImage ? `assets/${f.name}` : f.name, 
+                saveToProject: true
             };
         }));
-        
         setAttachments(prev => [...prev, ...newAttachments]);
     };
 
-    const toggleAttachmentSave = (index) => {
-        setAttachments(prev => prev.map((a, i) => i === index ? { ...a, saveToProject: !a.saveToProject } : a));
-    };
-
-    const updateAttachmentPath = (index, newPath) => {
-        setAttachments(prev => prev.map((a, i) => i === index ? { ...a, path: newPath } : a));
-    };
-
-    const removeAttachment = (index) => {
-        setAttachments(prev => prev.filter((_, i) => i !== index));
-    };
-
-    const removePoint = (index) => {
-        setPointEvents(prev => prev.filter((_, i) => i !== index));
-    };
-
-    const clearPoints = () => {
-        setPointEvents([]);
-    };
+    const toggleAttachmentSave = (index) => setAttachments(prev => prev.map((a, i) => i === index ? { ...a, saveToProject: !a.saveToProject } : a));
+    const updateAttachmentPath = (index, newPath) => setAttachments(prev => prev.map((a, i) => i === index ? { ...a, path: newPath } : a));
+    const removeAttachment = (index) => setAttachments(prev => prev.filter((_, i) => i !== index));
+    const removePoint = (index) => setPointEvents(prev => prev.filter((_, i) => i !== index));
+    const clearPoints = () => setPointEvents([]);
 
     const handleStop = () => {
         if (abortControllerRef.current) {
-            abortControllerRef.current.abort();
+            try { abortControllerRef.current.abort(); } catch {}
             abortControllerRef.current = null;
-            setAppStatus('idle');
-            setStatusMsg('Stopped by user');
-            setStreamText(prev => prev + '\n[Stopped by user]');
         }
+        const activeId = activeAssistantMsgIdRef.current;
+        if (activeId) {
+            setMessages(prev => prev.map(m => m.id !== activeId ? m : { ...m, isStreaming: false, content: (m.content || '') + '\n[Stopped by user]' }));
+            activeAssistantMsgIdRef.current = null;
+        }
+        setAppStatus('idle');
+        setStatusMsg('Stopped by user');
+        log('info', 'User aborted generation');
     };
-    
+
     const handleRestoreHistory = (index) => {
         const entry = history[index];
         if (entry) {
             setFiles(entry.files);
             setModifiedFiles([]);
-            setMessages(prev => [...prev, { role: 'assistant', content: `Restored version from ${new Date(entry.timestamp).toLocaleTimeString()}` }]);
+            setMessages(prev => [...prev, { id: makeId(), role: 'assistant', content: `Restored version from ${new Date(entry.timestamp).toLocaleTimeString()}`, thinking: '', isStreaming: false }]);
         }
     };
 
+    const isExcluded = (path) => {
+        if (path.startsWith('.vibecode/') || path.includes('/.vibecode/')) return true;
+        if (path.startsWith('.git/') || path.includes('/.git/')) return true;
+        if (path.includes('node_modules/')) return true;
+        if (path.endsWith('.log')) return true;
+        if (path.endsWith('.txt')) return true; 
+        return false;
+    };
+
     const handleSend = async () => {
-      // If generating, stop instead
-      if (appStatus !== 'idle') {
-          handleStop();
-          return;
+      if (appStatus !== 'idle') { handleStop(); return; }
+      if ((!input.trim() && !attachments.length)) return;
+
+      const userText = input;
+      const userMsgId = makeId();
+      const assistantMsgId = makeId();
+      activeAssistantMsgIdRef.current = assistantMsgId;
+
+      try {
+        await appendSessionLog('user.input', { text: userText || '', attachments: attachments.map(a => a.name) });
+      } catch {}
+
+      if (Object.keys(files).length > 0) {
+         setHistory(prev => [...prev, { timestamp: Date.now(), files: JSON.parse(JSON.stringify(files)), prompt: input || "Upload" }]);
+         setCurrentVersionIndex(history.length);
       }
 
-      if ((!input.trim() && !attachments.length)) return;
-      
-      // SNAPSHOT HISTORY BEFORE CHANGES
-      if (Object.keys(files).length > 0) {
-         setHistory(prev => [...prev, { 
-             timestamp: Date.now(), 
-             files: JSON.parse(JSON.stringify(files)), 
-             prompt: input || "Upload" 
-         }]);
-         setCurrentVersionIndex(history.length); // point to new entry
-      }
-      
-      // 1. Process Attachments und speichern ins Projekt
       const newFiles = {};
       const assetNotices = [];
-      
       attachments.forEach(att => {
           if (att.saveToProject) {
               newFiles[att.path] = att.data;
               assetNotices.push(att.path);
           }
       });
-      
-      // Update file state sofort
-      if (Object.keys(newFiles).length > 0) {
-          setFiles(prev => ({ ...prev, ...newFiles }));
-      }
+      if (Object.keys(newFiles).length > 0) setFiles(prev => ({ ...prev, ...newFiles }));
 
-      // 2. Construct Message
+      // Setup Messages
       let userContent;
-      let promptSuffix = "";
+      let promptSuffix = assetNotices.length > 0 ? `\n\nAVAILABLE ASSETS:\n${assetNotices.map(p => `- ${p}`).join('\n')}` : "";
 
-      if (assetNotices.length > 0) {
-          promptSuffix = `\n\nAVAILABLE ASSETS:\nI have added the following files to your project structure. You MUST use these paths in your code:\n${assetNotices.map(p => `- ${p}`).join('\n')}`;
-      }
-
-      // Wenn Bilder da sind, multimodales Format
       if (attachments.length > 0) {
-          userContent = [
-              { type: "text", text: (input || "Analyze these images and update the project.") + promptSuffix }
-          ];
-          attachments.forEach(att => {
-              userContent.push({
-                  type: "image_url",
-                  image_url: { url: att.data }
-              });
-          });
+          userContent = [{ type: "text", text: (input || "Analyze images.") + promptSuffix }];
+          attachments.forEach(att => userContent.push({ type: "image_url", image_url: { url: att.data } }));
       } else {
-          userContent = input + promptSuffix;
+          userContent = (input || '') + promptSuffix;
       }
 
-      const userMsg = { role: 'user', content: userContent };
+      const displayUserText = (input || '[Images Uploaded]') + (assetNotices.length ? `\n[+ Added ${assetNotices.length} assets]` : '');
       
-      // Anzeige im Chat
-      const displayMsg = { 
-          role: 'user', 
-          content: (input || '[Images Uploaded]') + (assetNotices.length ? `\n\n[+ Added ${assetNotices.length} assets]` : '')
-      }; 
-      
-      const newMsgs = [...messages, displayMsg];
-      setMessages(newMsgs);
-      
+      setMessages(prev => ([
+        ...prev,
+        { id: userMsgId, role: 'user', content: displayUserText, thinking: '', isStreaming: false },
+        { id: assistantMsgId, role: 'assistant', content: '', output: '', thinking: '', isStreaming: true }
+      ]));
+
       setInput('');
       setAttachments([]);
-      setStreamText('');
-      
-      setAppStatus('reading');
-      setStatusMsg('Reading context...');
-
-      // Kontext erstellen, grosse Binaerdaten rauslassen
-      const contextFiles = Object.entries({ ...files, ...newFiles }).map(([n, c]) => {
-          if (n.match(/\.(png|jpg|jpeg|gif|webp|ico)$/i) && c.length > 500) return `<!-- filename: ${n} -->\n[Binary Image Data Available at ${n}]`;
-          return `<!-- filename: ${n} -->\n${c}`;
-      }).join('\n\n');
-      
-      let contextString = `CURRENT FILES:\n${contextFiles}\n\nUSER REQUEST: ${input}`;
-      
-      if (runtimeError) {
-        contextString += `\n\n!!! DETECTED RUNTIME ERROR IN PREVIEW !!!\nError: ${runtimeError}\nPLEASE FIX THIS ERROR.`;
-      }
-
-      if (pointEvents.length) {
-        contextString += `\n\nPOINT & VIBE SELECTIONS:\n` + pointEvents.map((p, idx) => {
-          const safeText = (p.text || '').replace(/\s+/g, ' ').slice(0, 140);
-          const safeClasses = (p.classes || '').toString().replace(/\s+/g, ' ').slice(0, 140);
-          const safeTag = (p.tag || '').toLowerCase();
-          return `#${idx + 1}: tag=<${safeTag}> id="${p.id || ''}" class="${safeClasses}" text="${safeText}"`;
-        }).join('\n');
-      }
-
-      // Real API Messages
-      const apiMsgs = [
-          { role: 'system', content: getSystemPrompt() },
-          { role: 'system', content: contextString },
-          // nur letzte einfache Messages
-          ...messages.slice(-6).filter(m => typeof m.content === 'string'), 
-          userMsg
-      ];
-
       setRuntimeError(null);
+      
+      setAppStatus('loading');
+      setStatusMsg('Initializing...');
 
-      // Setup AbortController
-      abortControllerRef.current = new AbortController();
+      // Context Construction
+      const mergedFiles = { ...files, ...newFiles };
+      const contextFilesList = [];
+      const contextFiles = Object.entries(mergedFiles)
+          .filter(([n]) => !isExcluded(n))
+          .map(([n, c]) => {
+              contextFilesList.push(n);
+              if (n.match(/\.(png|jpg|jpeg|gif|webp|ico)$/i) && typeof c === 'string' && c.length > 500) {
+                  return `<!-- filename: ${n} -->\n[Binary Image Data Available at ${n}]`;
+              }
+              return `<!-- filename: ${n} -->\n${c}`;
+          }).join('\n\n');
+
+      let contextString = `CURRENT FILES:\n${contextFiles}\n\nUSER REQUEST: ${userText}`;
+      if (runtimeError) contextString += `\n\n!!! DETECTED RUNTIME ERROR IN PREVIEW !!!\nError: ${runtimeError}\nPLEASE FIX THIS ERROR.`;
+      if (pointEvents.length) contextString += `\n\nPOINT & VIBE SELECTIONS:\n` + pointEvents.map((p, idx) => `#${idx + 1}: tag=<${p.tag}> text="${(p.text||'').slice(0,50)}"`).join('\n');
+
+      await appendSessionLog('request.context_files', contextFilesList);
+      
+      const cleanUrl = (settings.apiUrl || '').replace(/\/chat\/completions$/, '').replace(/\/responses$/, '').replace(/\/v1$/, '').replace(/\/$/, '');
+      const canUseResponses = attachments.length === 0;
+
+      // Recursive Execution Function for Retry
+      const executeRun = async (retryAttempt = false) => {
+          const sysPrompt = getSystemPrompt(retryAttempt);
+          const temp = settings.temperature; // User has full control
+          const endpoint = canUseResponses ? `${cleanUrl}/v1/responses` : `${cleanUrl}/v1/chat/completions`;
+
+          const recentChat = messages
+            .slice(-6)
+            .filter(m => m.role === 'user')
+            .slice(-3)
+            .map(m => `USER: ${m.content}`)
+            .join('\n\n');
+
+          let payload = {};
+          let payloadMode = '';
+
+          if (!canUseResponses) {
+              payloadMode = 'messages_standard';
+              payload = {
+                  model: settings.model,
+                  messages: [
+                      { role: 'system', content: sysPrompt },
+                      { role: 'system', content: contextString },
+                      ...messages.slice(-6).map(m => ({ role: m.role, content: m.content || '' })),
+                      { role: 'user', content: userContent }
+                  ],
+                  stream: true
+                  // Temperature added optionally below
+              };
+          } else {
+              const inputString = `${contextString}\n\nRECENT CHAT:\n${recentChat}\n\nUSER REQUEST:\n${userText || ''}`;
+              payloadMode = 'instructions_input_string';
+              const strictInput = `SYSTEM:\n${sysPrompt}\n\n${inputString}`;
+              
+              payload = {
+                  model: settings.model,
+                  instructions: sysPrompt,
+                  input: strictInput,
+                  stream: true
+                  // Temperature added optionally below
+              };
+          }
+
+          // Only explicitly set temperature if it is defined (not null)
+          // This allows the backend (LM Studio) to use its own default/preset if 'temperature' is omitted.
+          if (typeof temp === 'number') {
+              payload.temperature = temp;
+          }
+
+          await appendSessionLog('request.start', { endpoint, payloadMode, retryAttempt, temp });
+          
+          abortControllerRef.current = new AbortController();
+          
+          // Unified Streaming Logic
+          let rawContent = '';
+          let explicitThinking = '';
+          let outputText = '';
+          let reasoningText = '';
+
+          const res = await fetch(endpoint, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload),
+              signal: abortControllerRef.current.signal
+          });
+
+          if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+
+          await Utils.streamSSE(res, ({ event, data }) => {
+              if (!data || data === '[DONE]') return;
+              const json = Utils.safeJsonParse(data);
+              if (!json) return;
+
+              let deltaContent = '';
+              let deltaThinking = '';
+
+              // Universal Parsing
+              if (json.choices?.[0]?.delta?.content) deltaContent = json.choices[0].delta.content;
+              else if (json.type === 'response.output_text.delta' || json.type === 'response.output_text.delta') deltaContent = json.delta;
+              else if (json.type === 'response.reasoning_text.delta' || json.type === 'response.reasoning.delta') deltaThinking = json.delta;
+              else if (typeof json.delta === 'string') deltaContent = json.delta; 
+
+              // Unpack objects
+              if (typeof deltaContent === 'object' && deltaContent.text) deltaContent = deltaContent.text;
+              if (typeof deltaThinking === 'object' && deltaThinking.text) deltaThinking = deltaThinking.text;
+
+              if (deltaContent) {
+                  rawContent += deltaContent;
+              }
+              if (deltaThinking) {
+                  explicitThinking += deltaThinking;
+              }
+
+              // Always check content for embedded thinking tags (Robustness for Qwen/Chat models)
+              const split = Utils.splitThinking(rawContent);
+              
+              // Effective Thinking = Explicit Events + Extracted Tags
+              reasoningText = explicitThinking + split.thinking;
+              
+              // Effective Output = Cleaned Content
+              outputText = split.output;
+
+              // Update UI
+              setMessages(prev => prev.map(m => {
+                  if (m.id !== assistantMsgId) return m;
+                  return {
+                      ...m,
+                      thinking: reasoningText,
+                      output: outputText,
+                      content: outputText,
+                      isStreaming: true
+                  };
+              }));
+
+              if (reasoningText && !outputText.trim()) {
+                  setAppStatus('thinking');
+                  setStatusMsg(reasoningText.slice(-60));
+              } else {
+                  setAppStatus('generating');
+                  setStatusMsg('Writing code...');
+              }
+          });
+
+          const finalRaw = rawContent;
+          const finalOutput = outputText || rawContent; // Fallback if split fails completely
+
+          // Python Detection Logic
+          const isPython = Utils.detectPython(finalRaw);
+          const isUnstructured = !Utils.hasEdits(Utils.parseResponse(finalOutput));
+
+          await appendSessionLog('model.complete', { 
+              rawLen: finalRaw.length, 
+              isPython, 
+              isUnstructured, 
+              retryAttempt 
+          });
+
+          if (isPython && !retryAttempt) {
+              log('warn', 'Python detected in output. Triggering Retry.');
+              setMessages(prev => prev.map(m => m.id === assistantMsgId ? { ...m, output: 'Invalid output detected (Python). Retrying...', isStreaming: true } : m));
+              await new Promise(r => setTimeout(r, 500)); 
+              return executeRun(true);
+          }
+
+          if (isPython && retryAttempt) {
+              log('error', 'Retry failed. Python still present.');
+              throw new Error("Model insists on generating Python despite retry instructions.");
+          }
+
+          if (isUnstructured && !isPython) {
+              log('warn', 'Response unstructured but not Python. Proceeding with best-effort parse.');
+          }
+
+          // Proceed to Parsing
+          setAppStatus('patching');
+          setStatusMsg('Applying changes...');
+
+          const parsedRaw = Utils.parseResponse(finalOutput);
+          const parsed = Utils.normalizeParsedOutput({ ...mergedFiles }, parsedRaw);
+
+          (parsed.warnings || []).forEach(w => log('warn', w));
+          
+          if (!Utils.hasEdits(parsed)) {
+               log('warn', 'No structured edits found.');
+          }
+
+          let nextFiles = Utils.applyPatchesToFiles({ ...mergedFiles }, parsed.patches || {});
+          nextFiles = { ...nextFiles, ...(parsed.files || {}) };
+
+          const changes = [];
+          Object.keys(nextFiles).forEach(key => {
+              if (mergedFiles[key] !== nextFiles[key]) changes.push(key);
+          });
+          setModifiedFiles(changes);
+
+          await appendSessionLog('files.changed', changes);
+
+          if (Object.keys(nextFiles).length > 0 && changes.length > 0) {
+              setFiles(nextFiles);
+              setViewMode('preview');
+              log('info', 'Applied edits', { changedFiles: changes });
+          } else {
+              log('info', 'No file changes to apply');
+          }
+      };
 
       try {
-        setAppStatus('thinking');
-        setStatusMsg('Contacting model...');
-
-        const cleanUrl = settings.apiUrl.replace(/\/chat\/completions$/, '').replace(/\/v1$/, '').replace(/\/$/, '');
-        const res = await fetch(`${cleanUrl}/v1/chat/completions`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ 
-                model: settings.model, 
-                messages: apiMsgs, 
-                stream: true, 
-                temperature: settings.temperature, 
-                max_tokens: settings.maxTokens 
-            }),
-            signal: abortControllerRef.current.signal
-        });
-
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let fullText = '';
-        let isThinking = false;
-
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            const chunk = decoder.decode(value, { stream: true });
-            const lines = chunk.split('\n');
-            for (const line of lines) {
-                if (line.startsWith('data: ') && line !== 'data: [DONE]') {
-                    try {
-                        const json = JSON.parse(line.substring(6));
-                        const delta = json.choices[0]?.delta?.content || '';
-                        fullText += delta;
-                        
-                        if (fullText.includes('<thinking>') && !fullText.includes('</thinking>')) {
-                            isThinking = true;
-                            const thinkPart = fullText.split('<thinking>')[1];
-                            setAppStatus('thinking');
-                            setStatusMsg(thinkPart.slice(-50)); 
-                        } else if (fullText.includes('</thinking>')) {
-                            isThinking = false;
-                            setAppStatus('generating');
-                            setStatusMsg('Writing code...');
-                        }
-
-                        if (!isThinking) {
-                           const visibleText = fullText.replace(/<thinking>[\s\S]*?<\/thinking>/, '').trimStart();
-                           setStreamText(visibleText);
-                        }
-                    } catch {}
-                }
-            }
-        }
-
-        setAppStatus('patching');
-        setStatusMsg('Applying changes...');
-
-        // Parse results
-        const parsed = Utils.parseResponse(fullText);
-        
-        let nextFiles = Utils.applyPatchesToFiles({ ...files, ...newFiles }, parsed.patches);
-        nextFiles = { ...nextFiles, ...parsed.files };
-        
-        // Identify modified files
-        const changes = [];
-        Object.keys(nextFiles).forEach(key => {
-            if (files[key] !== nextFiles[key]) changes.push(key);
-        });
-        setModifiedFiles(changes);
-
-        if (Object.keys(nextFiles).length > 0) {
-            setFiles(nextFiles);
-            setViewMode('preview');
-        }
-        
-        let finalMsgContent = parsed.thought 
-            ? `**Plan:** ${parsed.thought}\n\n${fullText.replace(/<thinking>[\s\S]*?<\/thinking>/, '').trim()}`
-            : fullText;
-
-        if (parsed.usedFallback) {
-            finalMsgContent += "\n\n⚠️ **Note:** The model output was unstructured. I applied a fallback parser to extract the code (assumed `index.html`).";
-        }
-
-        setMessages(prev => [...prev, { role: 'assistant', content: finalMsgContent }]);
-
+          await executeRun(false);
       } catch (e) {
-        if (e.name === 'AbortError') {
-             // gestoppt
-        } else {
-            console.error(e);
-            setMessages(prev => [...prev, { role: 'assistant', content: `Error: ${e.message}` }]);
-        }
+          if (e?.name === 'AbortError') {
+              log('info', 'Request aborted');
+          } else {
+              console.error(e);
+              log('error', 'Request failed', { message: e.message });
+              setMessages(prev => prev.map(m => m.id !== assistantMsgId ? m : { ...m, isStreaming: false, content: (m.content || '') + `\nError: ${e.message}` }));
+          }
       } finally {
-        setAppStatus('idle');
-        setStatusMsg('');
-        abortControllerRef.current = null;
+          setAppStatus('idle');
+          setStatusMsg('');
+          abortControllerRef.current = null;
+          activeAssistantMsgIdRef.current = null;
       }
     };
 
-    if (!setupDone) return html`
-        <${Styles} />
-        <${SetupScreen} 
-            settings=${settings} 
-            onSave=${s => { setSettings(s); setSetupDone(true); }} 
-            onVirtual=${s => {
-                setSettings(s);
-                setFiles(DEFAULT_TEMPLATE);
-                setSetupDone(true);
-            }}
-            onSelectDir=${async () => {
-                const h = await Utils.getDirHandle();
-                if(h) {
-                    setDirHandle(h);
-                    const fs = await Utils.readFiles(h);
-                    if(Object.keys(fs).length) setFiles(fs);
-                    return h;
-                }
-                return null;
-            }} 
-        />`;
+    if (!setupDone) return html`<${Styles} /><${SetupScreen} settings=${settings} onSave=${s => { setSettings(s); setSetupDone(true); }} onVirtual=${s => { setSettings(s); setFiles(DEFAULT_TEMPLATE); setSetupDone(true); }} onSelectDir=${async () => { const h = await Utils.getDirHandle(); if(h) { setDirHandle(h); const fs = await Utils.readFiles(h); if(Object.keys(fs).length) setFiles(fs); return h; } return null; }} />`;
 
     return html`
       <${Styles} />
       <div className="flex w-screen h-screen text-gray-200 font-sans overflow-hidden bg-gray-950">
-        
-        <!-- SIDEBAR -->
         <div className="w-[400px] flex flex-col border-r border-gray-800 bg-gray-950 z-10 shadow-xl flex-shrink-0 relative">
            <div className="h-14 flex items-center justify-between px-4 border-b border-gray-800 bg-gray-950/50 backdrop-blur-sm">
               <div className="flex items-center gap-3">
                  <div className="w-5 h-5 rounded-full liquid-orb"></div>
-                 <h1 className="font-bold text-lg tracking-tight text-white flex items-baseline gap-2">
-                  <span>VibeCoder</span>
-                  <span className="text-xs italic text-gray-400">OSS</span>
-                  </h1>
+                 <h1 className="font-bold text-lg tracking-tight text-white flex items-baseline gap-2"><span>VibeCoder</span><span className="text-xs italic text-gray-400">OSS</span></h1>
               </div>
               <button onClick=${() => setShowSettings(true)} className="text-gray-500 hover:text-white transition"><${Icon} name="Settings" /></button>
            </div>
-
            <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar" ref=${chatContainerRef} onScroll=${handleChatScroll}>
-              ${messages.map((m, i) => html`
-                 <div key=${i} className=${`flex flex-col ${m.role === 'user' ? 'items-end' : 'items-start'}`}>
-                    <div className=${`max-w-[90%] rounded-xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap break-words shadow-sm ${
-                        m.role === 'user' ? 'bg-blue-600 text-white rounded-br-none' : 'bg-gray-900 border border-gray-800 text-gray-300 rounded-bl-none'
-                    }`}>
-                        ${m.role === 'assistant' && m.content.startsWith('**Plan:**') 
-                            ? html`
-                                <div className="mb-2 pb-2 border-b border-gray-700 text-gray-400 text-xs font-mono">
-                                    ${m.content.split('\n\n')[0]}
-                                </div>
-                                <div>${m.content.split('\n\n').slice(1).join('\n\n')}</div>
-                              ` 
-                            : m.content}
-                    </div>
-                 </div>
-              `)}
-              ${streamText && html`
-                 <div className="flex flex-col items-start w-full">
-                    <div className="w-[90%] rounded-xl px-4 py-3 text-xs bg-gray-900 border border-purple-900/50 text-gray-400 font-mono whitespace-pre-wrap break-words border-l-2 border-purple-500 animate-pulse">
-                       ${streamText}
-                    </div>
-                 </div>
-              `}
+              ${messages.map(m => html`<${ChatMessage} key=${m.id} msg=${m} />`)}
               <div ref=${msgsEndRef}></div>
            </div>
-           
-           <!-- Floating Scroll Button -->
-           ${showScrollButton && html`
-              <button 
-                  onClick=${() => msgsEndRef.current?.scrollIntoView({ behavior: 'smooth' })}
-                  className="absolute bottom-[220px] right-6 p-2 bg-gray-800 border border-gray-700 text-white rounded-full shadow-lg shadow-black/50 hover:bg-gray-700 transition z-20"
-                  title="Scroll to Bottom"
-              >
-                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
-              </button>
-           `}
-
-           <!-- STATUS BAR AREA -->
+           ${showScrollButton && html`<button onClick=${() => msgsEndRef.current?.scrollIntoView({ behavior: 'smooth' })} className="absolute bottom-[220px] right-6 p-2 bg-gray-800 border border-gray-700 text-white rounded-full shadow-lg shadow-black/50 hover:bg-gray-700 transition z-20"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg></button>`}
            <div className="bg-gray-950 border-t border-gray-800">
               <${StatusBar} status=${appStatus} message=${statusMsg} />
-              
               <div className="p-4 relative">
-                 <!-- Attachments List -->
-                 ${attachments.length > 0 && html`
-                    <div className="flex flex-col gap-2 mb-3 max-h-48 overflow-y-auto custom-scrollbar">
-                        ${attachments.map((att, i) => html`
-                            <div className="flex items-center gap-3 bg-gray-900 border border-gray-800 p-2 rounded-lg group">
-                                <div className="w-12 h-12 flex-shrink-0 bg-gray-800 rounded overflow-hidden border border-gray-700">
-                                   <img src=${att.data} className="w-full h-full object-cover" />
-                                </div>
-                                <div className="flex-1 min-w-0">
-                                   <div className="flex items-center gap-2 mb-1">
-                                      <input 
-                                         type="text" 
-                                         value=${att.path} 
-                                         onChange=${e => updateAttachmentPath(i, e.target.value)}
-                                         className="bg-gray-950 text-xs text-green-400 border border-gray-700 rounded px-1 py-0.5 w-full focus:border-green-500 outline-none font-mono"
-                                         placeholder="Path (e.g., assets/img.png)"
-                                      />
-                                   </div>
-                                   <div 
-                                       className=${`text-[10px] cursor-pointer select-none ${att.saveToProject ? 'text-blue-400' : 'text-gray-500'}`} 
-                                       onClick=${() => toggleAttachmentSave(i)}
-                                   >
-                                       ${att.saveToProject ? '✓ Will save to project' : '○ Context only (Temporary)'}
-                                   </div>
-                                </div>
-                                <button onClick=${() => removeAttachment(i)} className="text-gray-500 hover:text-red-400 p-1 transition"><${Icon} name="Close" size=${14} /></button>
-                            </div>
-                        `)}
-                    </div>
-                 `}
-
-                 <!-- Point & Vibe Chips -->
-                 ${pointEvents.length > 0 && html`
-                    <div className="mb-3 flex flex-wrap gap-2 items-center text-[10px] text-gray-400">
-                       <span className="uppercase tracking-wide font-semibold text-gray-500">Point & Vibe</span>
-                       ${pointEvents.map((p, idx) => html`
-                          <div key=${idx} className="flex items-center gap-1 px-2 py-1 rounded-full bg-purple-950/40 border border-purple-700/60">
-                             <span className="text-purple-300 font-mono">#${idx + 1}</span>
-                             <span className="font-mono text-gray-300">&lt;${(p.tag || '').toLowerCase()}&gt;</span>
-                             ${p.text && html`<span className="max-w-[140px] truncate text-gray-400">"${p.text}"</span>`}
-                             <button className="ml-1 text-gray-500 hover:text-red-300" onClick=${() => removePoint(idx)}>
-                               <${Icon} name="Close" size=${10} />
-                             </button>
-                          </div>
-                       `)}
-                       <button className="ml-auto text-gray-500 hover:text-gray-200 underline decoration-dotted" onClick=${clearPoints}>Reset</button>
-                    </div>
-                 `}
-
-                 ${runtimeError && html`
-                    <div className="mb-3 p-2 bg-red-900/20 border border-red-500/30 rounded text-xs text-red-300 flex items-center gap-2 cursor-pointer hover:bg-red-900/30 transition" onClick=${() => setInput(`Fix error: ${runtimeError}`)}>
-                       <${Icon} name="Alert" size=${14} />
-                       <span className="font-bold">Error:</span> ${runtimeError}
-                       <span className="ml-auto text-red-400 underline text-[10px]">FIX</span>
-                    </div>
-                 `}
+                 ${attachments.length > 0 && html`<div className="flex flex-col gap-2 mb-3 max-h-48 overflow-y-auto custom-scrollbar">${attachments.map((att, i) => html`<div className="flex items-center gap-3 bg-gray-900 border border-gray-800 p-2 rounded-lg group"><div className="w-12 h-12 flex-shrink-0 bg-gray-800 rounded overflow-hidden border border-gray-700"><img src=${att.data} className="w-full h-full object-cover" /></div><div className="flex-1 min-w-0"><div className="flex items-center gap-2 mb-1"><input type="text" value=${att.path} onChange=${e => updateAttachmentPath(i, e.target.value)} className="bg-gray-950 text-xs text-green-400 border border-gray-700 rounded px-1 py-0.5 w-full focus:border-green-500 outline-none font-mono" /></div><div className="text-[10px] cursor-pointer select-none ${att.saveToProject ? 'text-blue-400' : 'text-gray-500'}" onClick=${() => toggleAttachmentSave(i)}>${att.saveToProject ? '✓ Will save' : '○ Context only'}</div></div><button onClick=${() => removeAttachment(i)} className="text-gray-500 hover:text-red-400 p-1"><${Icon} name="Close" size=${14} /></button></div>`)}</div>`}
+                 ${pointEvents.length > 0 && html`<div className="mb-3 flex flex-wrap gap-2 items-center text-[10px] text-gray-400"><span className="uppercase tracking-wide font-semibold text-gray-500">Point & Vibe</span>${pointEvents.map((p, idx) => html`<div key=${idx} className="flex items-center gap-1 px-2 py-1 rounded-full bg-purple-950/40 border border-purple-700/60"><span className="text-purple-300 font-mono">#${idx + 1}</span><span className="font-mono text-gray-300">&lt;${(p.tag || '').toLowerCase()}&gt;</span><button className="ml-1 text-gray-500 hover:text-red-300" onClick=${() => removePoint(idx)}><${Icon} name="Close" size=${10} /></button></div>`)}<button className="ml-auto text-gray-500 hover:text-gray-200 underline decoration-dotted" onClick=${clearPoints}>Reset</button></div>`}
                  <div className="relative group flex items-end gap-2 bg-gray-900 border border-gray-800 rounded-xl p-2 focus-within:border-purple-500/50 focus-within:ring-1 focus-within:ring-purple-500/20 transition">
-                    <input 
-                        type="file" 
-                        id="file-upload" 
-                        multiple 
-                        accept="image/*" 
-                        className="hidden" 
-                        onChange=${handleFileSelect}
-                    />
-                    <label for="file-upload" className="p-2 text-gray-500 hover:text-blue-400 cursor-pointer transition" title="Attach Image">
-                        <${Icon} name="Image" />
-                    </label>
-
-                    <textarea 
-                       value=${input} 
-                       onInput=${e => setInput(e.target.value)} 
-                       onKeyDown=${e => e.key === 'Enter' && !e.shiftKey && (e.preventDefault(), handleSend())}
-                       className="flex-1 bg-transparent text-sm outline-none resize-none text-gray-200 max-h-32 py-2" 
-                       rows=${1}
-                       style=${{minHeight: '24px'}} 
-                       placeholder="Ask to change something..." 
-                    />
-                    <button 
-                        onClick=${handleSend} 
-                        disabled=${(!input.trim() && !attachments.length) && appStatus === 'idle'} 
-                        className=${`p-2 rounded-lg shadow-lg transition flex-shrink-0 ${
-                            appStatus !== 'idle' 
-                                ? 'bg-red-600 hover:bg-red-500 text-white shadow-red-900/20' 
-                                : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-600/20 disabled:opacity-50 disabled:cursor-not-allowed'
-                        }`}
-                    >
-                       <${Icon} name=${appStatus !== 'idle' ? 'Stop' : 'Send'} />
-                    </button>
+                    <input type="file" id="file-upload" multiple accept="image/*" className="hidden" onChange=${handleFileSelect} />
+                    <label for="file-upload" className="p-2 text-gray-500 hover:text-blue-400 cursor-pointer transition" title="Attach Image"><${Icon} name="Image" /></label>
+                    <textarea value=${input} onInput=${e => setInput(e.target.value)} onKeyDown=${e => e.key === 'Enter' && !e.shiftKey && (e.preventDefault(), handleSend())} className="flex-1 bg-transparent text-sm outline-none resize-none text-gray-200 max-h-32 py-2" rows=${1} style=${{minHeight: '24px'}} placeholder="Ask to change something..." />
+                    <button onClick=${handleSend} disabled=${(!input.trim() && !attachments.length) && appStatus === 'idle'} className=${`p-2 rounded-lg shadow-lg transition flex-shrink-0 ${appStatus !== 'idle' ? 'bg-red-600 hover:bg-red-500 text-white shadow-red-900/20' : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-600/20 disabled:opacity-50 disabled:cursor-not-allowed'}`}><${Icon} name=${appStatus !== 'idle' ? 'Stop' : 'Send'} /></button>
                  </div>
               </div>
            </div>
         </div>
-
-        <!-- MAIN CONTENT / PREVIEW -->
         <div className="flex-1 flex flex-col overflow-hidden relative border-l border-gray-800">
            <div className="h-1 bg-gradient-to-r from-purple-600/50 to-blue-600/50 absolute top-0 left-0 right-0 z-10"></div>
-           <${CodePreview} 
-              files=${files} 
-              activeFile=${activeFile} 
-              setActiveFile=${setActiveFile} 
-              viewMode=${viewMode} 
-              setViewMode=${setViewMode} 
-              onFileChange=${(f, c) => setFiles({...files, [f]: c})} 
-              modifiedFiles=${modifiedFiles}
-              onOpenHistory=${() => setShowHistory(true)}
-           />
+           <${CodePreview} files=${files} activeFile=${activeFile} setActiveFile=${setActiveFile} viewMode=${viewMode} setViewMode=${setViewMode} onFileChange=${(f, c) => setFiles({...files, [f]: c})} modifiedFiles=${modifiedFiles} onOpenHistory=${() => setShowHistory(true)} onOpenLogs=${() => setShowLogs(true)} />
         </div>
-
-        <${SettingsModal} 
-           isOpen=${showSettings} 
-           onClose=${() => setShowSettings(false)} 
-           settings=${settings} 
-           onSave=${s => setSettings(s)} 
-           systemPromptPreview=${getSystemPrompt()}
-        />
-
-        <${HistoryModal}
-            isOpen=${showHistory}
-            onClose=${() => setShowHistory(false)}
-            history=${history}
-            currentVersionIndex=${currentVersionIndex}
-            onRestore=${handleRestoreHistory}
-        />
+        <${SettingsModal} isOpen=${showSettings} onClose=${() => setShowSettings(false)} settings=${settings} onSave=${s => setSettings(s)} systemPromptPreview=${getSystemPrompt()} />
+        <${HistoryModal} isOpen=${showHistory} onClose=${() => setShowHistory(false)} history=${history} currentVersionIndex=${currentVersionIndex} onRestore=${handleRestoreHistory} />
+        <${LogsModal} isOpen=${showLogs} onClose=${() => setShowLogs(false)} logs=${logs} onClear=${() => setLogs([])} onCopy=${copyLogs} sessionLogText=${sessionLogText} sessionLogFileName=${sessionLogFileName} onCopySessionLog=${copySessionLog} onDownloadSessionLog=${downloadSessionLog} />
       </div>
     `;
   };
